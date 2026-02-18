@@ -1,0 +1,51 @@
+# Binaries
+dogeluckymining
+dogeluckymining.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+.vs/
+
+# Saved chain tip (runtime state, per-network)
+chain_tip.json
+chain_tip_testnet.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+
+# Configuration files (contains sensitive RPC credentials)
+config.json
+
+# Cached peer files (auto-generated per network)
+peers_mainnet.json
+peers_testnet.json
+peers_mainnet.txt
+peers_testnet.txt
+
+# Crash logs
+crash.log

@@ -1,0 +1,817 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --primary-color: #c2a633;
+    --secondary-color: #1a1a1a;
+    --bg-color: #0d0d0d;
+    --card-bg: #1a1a1a;
+    --text-primary: #ffffff;
+    --text-secondary: #b0b0b0;
+    --success-color: #4caf50;
+    --error-color: #f44336;
+    --border-color: #333333;
+    color-scheme: dark;
+}
+
+body {
+    font-family: 'Comic Neue', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: linear-gradient(135deg, var(--bg-color) 0%, #1a1a1a 100%);
+    color: var(--text-primary);
+    min-height: 100vh;
+    padding: 20px;
+    line-height: 1.6;
+}
+
+/* Material Icons next to text */
+.material-icons {
+    vertical-align: middle;
+    font-size: 1.1em;
+    margin-right: 4px;
+}
+header h1 .material-icons {
+    font-size: 1.2em;
+}
+.p2p-peer-details {
+    font-size: 0.85em;
+    color: var(--text-secondary);
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 30px;
+    padding: 20px;
+}
+
+header h1 {
+    font-size: 2.5em;
+    margin-bottom: 10px;
+    color: var(--primary-color);
+    background: linear-gradient(135deg, var(--primary-color), #ffd700);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    font-size: 1.1em;
+}
+
+.status-bar {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 15px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.1em;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--error-color);
+    animation: pulse 2s infinite;
+}
+
+.status-indicator.active {
+    background: var(--success-color);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.network-badge {
+    margin-left: auto;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.network-badge.mainnet {
+    background: linear-gradient(135deg, #4caf50, #45a049);
+    color: white;
+}
+
+.network-badge.testnet {
+    background: linear-gradient(135deg, #ff9800, #f57c00);
+    color: white;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.stat-card {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(194, 166, 51, 0.2);
+}
+
+.stat-label {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.stat-value {
+    font-size: 2em;
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+
+.mining-log-section {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 20px;
+    margin-top: 20px;
+}
+
+.log-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.log-header h2 {
+    margin: 0;
+    font-size: 1.3em;
+    color: var(--primary-color);
+}
+
+/* Toggle label styling is now handled by modern checkbox styles above */
+
+/* Modern Checkbox/Toggle Switch Styles */
+.checkbox-label,
+.form-group label:has(input[type="checkbox"]),
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    padding: 8px 0;
+    transition: color 0.2s;
+    margin-bottom: 0;
+    font-weight: normal;
+}
+
+.checkbox-label:hover,
+.form-group label:has(input[type="checkbox"]):hover,
+.toggle-label:hover {
+    color: var(--text-primary);
+}
+
+.checkbox-label input[type="checkbox"],
+.form-group label input[type="checkbox"],
+.toggle-label input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    cursor: pointer;
+    height: 0;
+    width: 0;
+}
+
+/* Modern Toggle Switch */
+.checkbox-label .modern-checkbox,
+.form-group label .modern-checkbox,
+.toggle-label .modern-checkbox {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 28px;
+    flex-shrink: 0;
+}
+
+.checkbox-label .modern-checkbox .slider,
+.form-group label .modern-checkbox .slider,
+.toggle-label .modern-checkbox .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--border-color);
+    transition: 0.3s;
+    border-radius: 28px;
+    border: 2px solid var(--border-color);
+}
+
+.checkbox-label .modern-checkbox .slider:before,
+.form-group label .modern-checkbox .slider:before,
+.toggle-label .modern-checkbox .slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.checkbox-label input[type="checkbox"]:checked + .modern-checkbox .slider,
+.form-group label input[type="checkbox"]:checked + .modern-checkbox .slider,
+.toggle-label input[type="checkbox"]:checked + .modern-checkbox .slider {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.checkbox-label input[type="checkbox"]:checked + .modern-checkbox .slider:before,
+.form-group label input[type="checkbox"]:checked + .modern-checkbox .slider:before,
+.toggle-label input[type="checkbox"]:checked + .modern-checkbox .slider:before {
+    transform: translateX(22px);
+    background-color: white;
+    box-shadow: 0 2px 6px rgba(194, 166, 51, 0.5);
+}
+
+.checkbox-label input[type="checkbox"]:focus + .modern-checkbox .slider,
+.form-group label input[type="checkbox"]:focus + .modern-checkbox .slider,
+.toggle-label input[type="checkbox"]:focus + .modern-checkbox .slider {
+    box-shadow: 0 0 0 3px rgba(194, 166, 51, 0.2);
+}
+
+.checkbox-label input[type="checkbox"]:hover + .modern-checkbox .slider,
+.form-group label input[type="checkbox"]:hover + .modern-checkbox .slider,
+.toggle-label input[type="checkbox"]:hover + .modern-checkbox .slider {
+    border-color: var(--primary-color);
+}
+
+.checkbox-label input[type="checkbox"]:checked:hover + .modern-checkbox .slider,
+.form-group label input[type="checkbox"]:checked:hover + .modern-checkbox .slider,
+.toggle-label input[type="checkbox"]:checked:hover + .modern-checkbox .slider {
+    background-color: #d4b83a;
+    border-color: #d4b83a;
+}
+
+.checkbox-label span:not(.modern-checkbox),
+.form-group label span:not(.modern-checkbox),
+.toggle-label span:not(.modern-checkbox) {
+    flex: 1;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.block-info {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.block-info h2 {
+    margin-bottom: 15px;
+    color: var(--primary-color);
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background: rgba(194, 166, 51, 0.1);
+    border-radius: 5px;
+    min-width: 0;
+}
+.info-item .info-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.info-item.full-width {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.info-label {
+    color: var(--text-secondary);
+}
+
+.info-value {
+    color: var(--primary-color);
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+}
+
+.info-value.large-value {
+    font-size: 1.5em;
+}
+
+/* Target as a single-line status bar below Height/Difficulty */
+.target-bar {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 36px;
+}
+
+.target-label {
+    color: var(--text-secondary);
+    font-size: 0.9em;
+    flex-shrink: 0;
+}
+
+.target-bar .target-value {
+    font-family: 'Courier New', monospace;
+    font-size: 0.8em;
+    color: #4CAF50;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* P2P peer in a compact bar so it doesn't push other blocks */
+.p2p-peer-bar {
+    margin-top: 8px;
+    padding: 6px 12px;
+    background: rgba(194, 166, 51, 0.08);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9em;
+}
+
+.p2p-peer-label {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.p2p-peer-value {
+    color: var(--primary-color);
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.controls {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    margin-bottom: 30px;
+}
+
+.btn {
+    padding: 15px 30px;
+    font-size: 1.1em;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    color: var(--bg-color);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: #d4b83a;
+    transform: scale(1.05);
+    box-shadow: 0 5px 20px rgba(194, 166, 51, 0.4);
+}
+
+.btn-secondary {
+    background: var(--error-color);
+    color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: #d32f2f;
+    transform: scale(1.05);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-saving {
+    cursor: wait;
+    pointer-events: none;
+}
+.btn-saving #saveConfigBtnText {
+    display: inline-block;
+    animation: saving-pulse 0.8s ease-in-out infinite;
+}
+@keyframes saving-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.log {
+    background: #0a0a0a;
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    padding: 15px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.log-entry {
+    padding: 5px 0;
+    color: var(--text-secondary);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.log-entry:last-child {
+    border-bottom: none;
+}
+
+.log-entry.success {
+    color: var(--success-color);
+}
+
+.log-entry.error {
+    color: var(--error-color);
+}
+
+.log-entry.info {
+    color: var(--primary-color);
+}
+
+/* Scrollbar styling */
+.log::-webkit-scrollbar {
+    width: 8px;
+}
+
+.log::-webkit-scrollbar-track {
+    background: #0a0a0a;
+}
+
+.log::-webkit-scrollbar-thumb {
+    background: var(--primary-color);
+    border-radius: 4px;
+}
+
+.log::-webkit-scrollbar-thumb:hover {
+    background: #d4b83a;
+}
+
+.btn-config {
+    background: #666;
+    color: white;
+}
+
+.btn-config:hover:not(:disabled) {
+    background: #777;
+    transform: scale(1.05);
+}
+
+.btn-test {
+    background: #2196F3;
+    color: white;
+}
+
+.btn-test:hover:not(:disabled) {
+    background: #1976D2;
+    transform: scale(1.05);
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(5px);
+}
+
+.modal-content {
+    background: var(--card-bg);
+    margin: 5% auto;
+    padding: 0;
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    width: 90%;
+    max-width: 600px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.modal-header {
+    padding: 20px;
+    border-bottom: 2px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h2 {
+    margin: 0;
+    color: var(--primary-color);
+}
+
+.close {
+    color: var(--text-secondary);
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+    background: none;
+    border: none;
+    padding: 0;
+    line-height: 1;
+}
+
+.close:hover {
+    color: var(--text-primary);
+}
+
+/* Keyboard focus indicators for interactive elements */
+.btn:focus-visible,
+.close:focus-visible,
+select:focus-visible,
+input:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+/* Regular form labels (not checkbox labels) */
+.form-group > label:not(.toggle-label):not(.checkbox-label):not(:has(input[type="checkbox"])) {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-weight: bold;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px;
+    background: var(--bg-color);
+    border: 2px solid var(--border-color);
+    border-radius: 5px;
+    color: var(--text-primary);
+    font-size: 1em;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.form-group select {
+    width: 100%;
+    padding: 12px;
+    background: var(--bg-color);
+    border: 2px solid var(--border-color);
+    border-radius: 5px;
+    color: var(--text-primary);
+    font-size: 1em;
+    transition: border-color 0.2s;
+    cursor: pointer;
+}
+
+.form-group select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.form-group select option {
+    background: var(--bg-color);
+    color: var(--text-primary);
+}
+
+.form-group select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.form-group small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+
+.payout-address-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.payout-address-row input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.payout-address-row .btn {
+    white-space: nowrap;
+}
+
+.generate-address-warning {
+    background: rgba(244, 67, 54, 0.15);
+    border: 1px solid var(--error-color);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+}
+
+.generate-address-warning p {
+    margin: 0 0 6px 0;
+    color: var(--text-primary);
+    font-size: 0.95em;
+}
+
+.generate-address-warning p:last-child {
+    margin-bottom: 0;
+}
+
+.key-display-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.key-display-row .key-display {
+    flex: 1;
+    font-family: ui-monospace, monospace;
+    font-size: 0.9em;
+}
+
+.key-display-row .btn-copy {
+    flex-shrink: 0;
+    padding: 8px 12px;
+}
+
+.generate-address-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+/* When connection mode is P2P, RPC fields are optional and visually de-emphasized */
+.form-group.rpc-optional {
+    opacity: 0.7;
+}
+
+.form-group.rpc-optional small {
+    color: var(--text-secondary);
+}
+
+.p2p-options .form-hint {
+    color: var(--text-secondary);
+    font-size: 0.95em;
+    margin-bottom: 12px;
+}
+
+.modal-body hr {
+    margin: 20px 0;
+    border: none;
+    border-top: 1px solid var(--border-color);
+}
+
+.modal-body h3 {
+    margin-top: 0;
+    color: var(--success-color);
+    font-size: 1.2em;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 25px;
+    flex-wrap: wrap;
+}
+
+.form-actions .btn {
+    flex: 1;
+    min-width: 120px;
+}
+
+.config-status {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 5px;
+    display: none;
+}
+
+.config-status.success {
+    display: block;
+    background: rgba(76, 175, 80, 0.2);
+    border: 1px solid var(--success-color);
+    color: var(--success-color);
+}
+
+.config-status.error {
+    display: block;
+    background: rgba(244, 67, 54, 0.2);
+    border: 1px solid var(--error-color);
+    color: var(--error-color);
+}
+
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 2em;
+    }
+    
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .controls {
+        flex-direction: column;
+    }
+    
+    .btn {
+        width: 100%;
+    }
+
+    .modal-content {
+        width: 95%;
+        margin: 10% auto;
+    }
+
+    .form-actions {
+        flex-direction: column;
+    }
+
+    .form-actions .btn {
+        width: 100%;
+    }
+}

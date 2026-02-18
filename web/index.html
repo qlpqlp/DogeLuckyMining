@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ðoge Lucky Mining - Dogecoin Miner</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:,">
+    <noscript><style>body{background:#1a1a2e;color:#e0e0e0;font-family:sans-serif;padding:40px;text-align:center}</style></noscript>
+</head>
+<body>
+    <noscript>
+        <div style="background:#1a1a2e;color:#e0e0e0;padding:40px;text-align:center;font-family:sans-serif;">
+            <h1>Ðoge Lucky Mining</h1>
+            <p>This application requires JavaScript to run. Please enable JavaScript in your browser.</p>
+        </div>
+    </noscript>
+    <div class="container">
+        <header>
+            <h1><span class="material-icons" aria-hidden="true">pets</span> Ðoge Lucky Mining</h1>
+            <p class="subtitle">Autonomous Dogecoin Lucky Mining for Empty Blocks</p>
+        </header>
+
+        <div class="status-bar" id="statusBar" role="status" aria-label="Mining status">
+            <span class="status-indicator" id="statusIndicator" aria-hidden="true"></span>
+            <span id="statusText">Stopped</span>
+            <span class="network-badge" id="networkBadge">Mainnet</span>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Hash Rate</div>
+                <div class="stat-value" id="hashRate">0 H/s</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total Hashes</div>
+                <div class="stat-value" id="totalHashes">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Blocks Found</div>
+                <div class="stat-value" id="blocksFound">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value" id="uptime">00:00:00</div>
+            </div>
+        </div>
+
+        <div class="block-info">
+            <h2>Current Block</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Height:</span>
+                    <span class="info-value large-value" id="blockHeight">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Difficulty:</span>
+                    <span class="info-value large-value" id="blockDifficulty">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Time to win a block:</span>
+                    <span class="info-value" id="expectedTimeToBlock" title="Average time to find one block at current difficulty and hashrate (luck varies)">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Block Time:</span>
+                    <span class="info-value" id="blockAttemptSeconds" title="Time spent mining the current/last block attempt">-</span>
+                </div>
+            </div>
+            <div class="target-bar" id="targetBar" title="">
+                <span class="target-label">Target</span>
+                <span class="target-value" id="blockTarget">-</span>
+            </div>
+            <div class="p2p-peer-bar" id="p2pPeerWrap" style="display: none;">
+                <span class="p2p-peer-label"><span class="material-icons">lan</span> P2P peer</span>
+                <span class="p2p-peer-value" id="p2pPeer">-</span>
+                <div id="p2pPeerDetails" class="p2p-peer-details"></div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn" class="btn btn-primary">Start Mining</button>
+            <button id="stopBtn" class="btn btn-secondary" disabled>Stop Mining</button>
+            <button id="configBtn" class="btn btn-config"><span class="material-icons">settings</span> Configuration</button>
+        </div>
+
+        <!-- Configuration Modal -->
+        <div id="configModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2><span class="material-icons">settings</span> Configuration</h2>
+                    <button class="close" id="closeConfig" aria-label="Close configuration">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="configForm">
+                        <div class="form-group">
+                            <label for="network">Network:</label>
+                            <select id="network" name="network">
+                                <option value="mainnet">Mainnet</option>
+                                <option value="testnet" selected>Testnet</option>
+                            </select>
+                            <small>Dogecoin mainnet (real DOGE) or testnet (test coins only).</small>
+                        </div>
+                        <div class="form-group connection-mode-group">
+                            <label for="connectionMode">Connection mode:</label>
+                            <select id="connectionMode" name="connectionMode">
+                                <option value="rpc">Use RPC (Dogecoin Core node)</option>
+                                <option value="p2p" selected>P2P only (no node required)</option>
+                            </select>
+                            <small><strong>RPC:</strong> Connect to your local or remote Dogecoin Core (needs node). <strong>P2P:</strong> Connect directly to the network — no Dogecoin Core needed.</small>
+                        </div>
+                        <div id="rpcFieldsWrap">
+                            <div id="rpcFieldsGroup" class="form-group">
+                                <label for="rpcUrl">RPC URL:</label>
+                                <input type="text" id="rpcUrl" name="rpcUrl" placeholder="http://localhost:22555" required>
+                                <small>Dogecoin Core RPC endpoint</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="rpcUser">RPC Username:</label>
+                                <input type="text" id="rpcUser" name="rpcUser" placeholder="dogecoin" required>
+                                <small>RPC username from dogecoin.conf</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="rpcPass">RPC Password:</label>
+                                <input type="password" id="rpcPass" name="rpcPass" placeholder="your_password" required>
+                                <small>RPC password from dogecoin.conf</small>
+                            </div>
+                        </div>
+                        <div id="payoutAddrWrap" class="form-group">
+                            <label for="payoutAddr">Payout Address (testnet):</label>
+                            <div class="payout-address-row">
+                                <input type="text" id="payoutAddr" name="payoutAddr" placeholder="n..." maxlength="35" required>
+                                <button type="button" id="generateAddressBtn" class="btn btn-secondary" title="Generate a new Dogecoin address for the selected network"><span class="material-icons">key</span> Generate new address</button>
+                            </div>
+                            <small id="payoutAddrHint">Testnet: use an n... address (required to run). Mainnet: D... address (required).</small>
+                        </div>
+
+                        <div id="p2pOptionsWrap" class="p2p-options" style="display: none;">
+                            <h3 style="margin-top: 0; color: #4CAF50;">📡 P2P header sync start</h3>
+                            <p class="form-hint">Start syncing headers from a checkpoint to reach the tip faster. Choose mainnet or testnet checkpoints depending on Network.</p>
+                            <div id="p2pCheckpointMainnetWrap" class="form-group">
+                                <label for="p2pCheckpointMainnet">Mainnet checkpoint:</label>
+                                <select id="p2pCheckpointMainnet" name="p2pCheckpointMainnet">
+                                    <option value="">From beginning (genesis)</option>
+                                    <option value="0">Genesis (block 0)</option>
+                                    <option value="3043797">Block 3,043,797 (Jan 1, 2020)</option>
+                                    <option value="5526282">Block 5,526,282 (Jan 1, 2025)</option>
+                                    <option value="6024440" selected>Block 6,024,440 (Jan 1, 2026)</option>
+                                </select>
+                                <small>Same as Dogecoin wallet (checkpoints-custom.txt).</small>
+                            </div>
+                            <div id="p2pCheckpointTestnetWrap" class="form-group" style="display: none;">
+                                <label for="p2pCheckpointTestnet">Testnet checkpoint:</label>
+                                <select id="p2pCheckpointTestnet" name="p2pCheckpointTestnet">
+                                    <option value="">From beginning (genesis)</option>
+                                    <option value="0">Genesis (block 0)</option>
+                                    <option value="38150909" selected>Block 38,150,909 (Feb 17, 2026)</option>
+                                </select>
+                                <small><strong>Note:</strong> Testnet has low hashrate and frequent reorganizations. If this checkpoint fails, switch to Genesis for the most reliable sync.</small>
+                            </div>
+                            <div id="p2pPeerOverrideMainnetWrap" class="form-group">
+                                <label for="p2pPeerOverrideMainnet">Mainnet peer override:</label>
+                                <input type="text" id="p2pPeerOverrideMainnet" name="p2pPeerOverrideMainnet" placeholder="seed.multidoge.org:22556" maxlength="128">
+                                <small>Optional. Use a specific mainnet node instead of DNS discovery (e.g., seed.multidoge.org:22556)</small>
+                            </div>
+                            <div id="p2pPeerOverrideTestnetWrap" class="form-group" style="display: none;">
+                                <label for="p2pPeerOverrideTestnet">Testnet peer override:</label>
+                                <input type="text" id="p2pPeerOverrideTestnet" name="p2pPeerOverrideTestnet" placeholder="testseed.jrn.me.uk:44556" maxlength="128">
+                                <small>Optional. Use a specific testnet node instead of DNS discovery (e.g., testseed.jrn.me.uk:44556)</small>
+                            </div>
+                        </div>
+                        
+                        <hr style="margin: 20px 0; border: none; border-top: 1px solid #333;">
+                        <h3 style="margin-top: 0; color: #4CAF50;"><span class="material-icons">speed</span> Mining Performance</h3>
+                        
+                        <div class="form-group">
+                            <label for="deviceType">Device Type:</label>
+                            <select id="deviceType" name="deviceType">
+                                <option value="cpu">CPU Mode</option>
+                                <option value="gpu" selected>GPU Mode (OpenCL hardware acceleration)</option>
+                            </select>
+                            <small><strong>Note:</strong> <strong>GPU Mode</strong> uses your graphics card (OpenCL) for Scrypt mining when available, with CPU fallback. <strong>CPU Mode</strong> uses multi-threaded CPU mining. Both use optimized algorithms and configurable threads.</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="threadCount">Thread Count:</label>
+                            <input type="number" id="threadCount" name="threadCount" min="1" max="64" value="64">
+                            <small><strong>Parallel Mining:</strong> Number of parallel mining threads (1-64). 
+                            <br>• <strong>CPU Mode:</strong> Thread count = 1 (single-threaded), &gt;1 (parallel multi-threaded)
+                            <br>• <strong>GPU Mode:</strong> Threads used for CPU fallback when GPU is unavailable; GPU uses its own batch size
+                            <br>• More threads = higher hash rate in CPU mode</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="miningIntensity">Mining Intensity:</label>
+                            <select id="miningIntensity" name="miningIntensity">
+                                <option value="low">Low (50K hashes/block)</option>
+                                <option value="medium">Medium (100K hashes/block)</option>
+                                <option value="high">High (500K hashes/block)</option>
+                                <option value="extreme" selected>Extreme (1M hashes/block)</option>
+                            </select>
+                            <small>How aggressively to mine. Higher = more hashes but more CPU usage</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="maxHashes">Max Hashes Per Block:</label>
+                            <input type="number" id="maxHashes" name="maxHashes" min="1000" max="1000000" value="1000000" step="1000">
+                            <small>Maximum hashes to attempt per block template (1000-1,000,000). Auto-adjusted by intensity</small>
+                        </div>
+                        
+                        <hr style="margin: 20px 0; border: none; border-top: 1px solid #333;">
+                        <h3 style="margin-top: 0; color: #4CAF50;"><span class="material-icons">casino</span> Lucky Nonce Search Strategy</h3>
+                        
+                        <div class="form-group">
+                            <label for="nonceSearchMode">Nonce Search Mode:</label>
+                            <select id="nonceSearchMode" name="nonceSearchMode">
+                                <option value="sequential" selected>Sequential (0 → 4.3B)</option>
+                                <option value="forward">Forward (from calculated start)</option>
+                                <option value="backward">Backward (from calculated start)</option>
+                            </select>
+                            <small><strong>Sequential:</strong> Test nonces 0, 1, 2, 3... (full coverage)<br>
+                            <strong>Forward:</strong> Start from calculated point, increment forward (wraps at 0xFFFFFFFF)<br>
+                            <strong>Backward:</strong> Start from calculated point, decrement backward (wraps at 0)</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="nonceStartMode">Nonce Start Mode:</label>
+                            <select id="nonceStartMode" name="nonceStartMode">
+                                <option value="calculated" selected>Calculated (from block metadata)</option>
+                                <option value="random">Random (time-based)</option>
+                            </select>
+                            <small><strong>Calculated:</strong> Start nonce = Version XOR Timestamp XOR Bits (deterministic per block)<br>
+                            <strong>Random:</strong> Start nonce = current time (pseudo-random)</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="useStride" name="useStride">
+                                <span class="modern-checkbox">
+                                    <span class="slider"></span>
+                                </span>
+                                <span>Use Stride-Based Iteration</span>
+                            </label>
+                            <small><strong>Stride Mode:</strong> Each thread tests nonces with stride = threadCount<br>
+                            Example (4 threads): Thread 0 tests 0, 4, 8, 12... Thread 1 tests 1, 5, 9, 13...<br>
+                            <strong>Range Mode (unchecked):</strong> Each thread gets a unique nonce range (default, recommended)</small>
+                        </div>
+                        
+                        <div class="form-actions">
+                            <button type="button" id="testConnectionBtn" class="btn btn-test">Test</button>
+                            <button type="submit" id="saveConfigBtn" class="btn btn-primary"><span id="saveConfigBtnText">Save</span></button>
+                            <button type="button" id="cancelConfigBtn" class="btn btn-secondary">Cancel</button>
+                        </div>
+                    </form>
+                    <div id="configStatus" class="config-status"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generated address / key display modal -->
+        <div id="generateAddressModal" class="modal">
+            <div class="modal-content generate-address-modal-content">
+                <div class="modal-header">
+                    <h2><span class="material-icons">key</span> New Dogecoin Address</h2>
+                    <button type="button" class="close" id="closeGenerateAddressModal" aria-label="Close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="generate-address-warning">
+                        <p><strong>Store your private key in a safe place.</strong></p>
+                        <p>Anyone with the private key can spend funds sent to this address. We do not store it. If you lose it, you cannot recover the funds.</p>
+                    </div>
+                    <div class="form-group">
+                        <label>Public address (use for payout):</label>
+                        <div class="key-display-row">
+                            <input type="text" id="generatedAddressDisplay" readonly class="key-display">
+                            <button type="button" id="copyAddressBtn" class="btn btn-secondary btn-copy" title="Copy address">Copy</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Private key (WIF — keep secret):</label>
+                        <div class="key-display-row">
+                            <input type="password" id="generatedPrivateKeyDisplay" readonly class="key-display">
+                            <button type="button" id="copyPrivateKeyBtn" class="btn btn-secondary btn-copy" title="Copy private key">Copy</button>
+                        </div>
+                    </div>
+                    <div class="generate-address-actions">
+                        <button type="button" id="useGeneratedAddressBtn" class="btn btn-primary">Use this address as payout</button>
+                        <button type="button" id="closeGenerateAddressModalBtn" class="btn btn-secondary">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mining-log-section">
+            <div class="log-header">
+                <h2><span class="material-icons">list_alt</span> Mining Log</h2>
+                <div style="display: flex; gap: 15px; align-items: center;">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="hashLogToggle" checked>
+                        <span class="modern-checkbox">
+                            <span class="slider"></span>
+                        </span>
+                        <span>Show Hash Attempts</span>
+                    </label>
+                    <!--<button id="clearLogsBtn" class="btn btn-secondary" style="padding: 5px 15px; font-size: 0.9em;">Clear Logs</button>-->
+                </div>
+            </div>
+            <div class="log" id="log">
+                <div class="log-entry">Waiting to start mining...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
