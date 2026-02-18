@@ -2,11 +2,11 @@
 
 ![Screenshot](img/Screenshot.png)
 
-**Coded with love for the Dogecoin community — open source.** 🐕
+**Coded with love for the Dogecoin community ,open source.** 🐕
 
 A **funny, silly, experimental** project that demonstrates current protocol realities: anyone can mine **empty blocks** on the Dogecoin network and skip validating transactions. This is a solo miner that builds blocks with **no transactions** (only the coinbase) and submits them over **pure P2P** or via a full node’s RPC.
 
-**Use any normal computer** — CPU or GPU — with no special hardware. No pool, no account: just you and the chain.
+**Use any normal computer** ,CPU or GPU ,with no special hardware. No pool, no account: just you and the chain.
 
 ---
 
@@ -17,8 +17,8 @@ Doge Lucky Mining is a **solo Dogecoin miner** that:
 - Mines **empty blocks** (block 10k coins reward only, zero transactions).
 - Runs on **mainnet** or **testnet**.
 - Works in two modes:
-  - **Pure P2P** — connect directly to the Dogecoin network. No full node, no Dogecoin Core, no RPC. Absolute solo mining.
-  - **RPC** — connect to an existing node (e.g. **Dogecoin Core**) and use it for the chain tip and block submission.
+  - **Pure P2P** ,connect directly to the Dogecoin network. No full node, no Dogecoin Core, no RPC. Absolute solo mining.
+  - **RPC** ,connect to an existing node (e.g. **Dogecoin Core**) and use it for the chain tip and block submission.
 - **Optional address generation:** If you don’t have a payout address yet, the Configuration page can generate **mainnet** or **testnet** Dogecoin addresses for you. This uses **LibDogecoin** from the [Dogecoin Foundation](https://github.com/dogecoinfoundation/libdogecoin) (via the [dogeorg/doge](https://github.com/dogeorg/doge) Go library). You’ll see the public address and private key (WIF) and must store the private key safely; the app does not store it.
 
 It uses your machine’s **CPU** (multi-threaded Scrypt) or **GPU** (OpenCL, **Windows builds only** in the current release). A web interface on port 42069 lets you configure and monitor everything.
@@ -27,9 +27,9 @@ It uses your machine’s **CPU** (multi-threaded Scrypt) or **GPU** (OpenCL, **W
 
 ## What is it for?
 
-- **Experimentation and education** — to show that the current protocol allows mining valid empty blocks and that validation of other people’s transactions is optional for miners.
-- **Testing** — testnet solo mining without running a full node.
-- **Fun** — a silly project to see “can I actually find a block from my laptop?”
+- **Experimentation and education** ,to show that the current protocol allows mining valid empty blocks and that validation of other people’s transactions is optional for miners.
+- **Testing** ,testnet solo mining without running a full node.
+- **Fun** ,a silly project to see “can I actually find a block from my laptop?”
 
 It is **not** a "profit" tool; block discovery is a lottery. Treat it as a protocol experiment and a learning project.
 
@@ -42,7 +42,7 @@ It is **not** a "profit" tool; block discovery is a lottery. Treat it as a proto
    - **RPC mode:** The miner asks your Dogecoin Core (or other RPC node) for the best block hash and builds the next block on top.
 
 2. **Block template**
-   - Builds a block with **only the coinbase** (reward to your payout address). No mempool, no transactions — an empty block.
+   - Builds a block with **only the coinbase** (reward to your payout address). No mempool, no transactions ,an empty block.
 
 3. **Mining**
    - Solves the Scrypt PoW (same as Dogecoin): tries nonces until the block hash is below the network target. Uses either:
@@ -94,7 +94,7 @@ The `dist/` folder will contain the six binaries plus **SHA256SUMS.txt** (checks
 1. Start the miner (e.g. double‑click the `.exe` on Windows, or `./dogelucky` on Linux/macOS).
 2. The miner starts a web interface on **port 42069** (or the next free port if 42069 is in use). Your default browser should open automatically to **http://localhost:42069**. If it doesn’t, open that address in your browser.
 3. On **first run**, the Configuration page opens with **Testnet** and **P2P only** pre-selected (no full node required). You **must** set:
-   - **Payout address:** A valid testnet (n...) or mainnet (D...) address (required). If you don’t have one, use **Generate new address** in Configuration — the app can generate mainnet or testnet addresses using **LibDogecoin** (Dogecoin Foundation). You’ll be shown the public address and private key; store the private key safely.
+   - **Payout address:** A valid testnet (n...) or mainnet (D...) address (required). If you don’t have one, use **Generate new address** in Configuration ,the app can generate mainnet or testnet addresses using **LibDogecoin** (Dogecoin Foundation). You’ll be shown the public address and private key; store the private key safely.
    - Optionally change **Network** or **Connection mode** (RPC if you use Dogecoin Core).
 4. Save, then click **Start Mining**.
 
@@ -109,7 +109,7 @@ Mining runs in the background; the web UI shows hashrate, current block, and log
 | **Network**        | Mainnet (real DOGE) or Testnet. |
 | **Connection mode**| **P2P** = no node; **RPC** = use Dogecoin Core (or other) RPC. |
 | **Payout address** | Where the block reward goes. **Required** for both networks. You can paste your own address or use **Generate new address** (optional). |
-| **Generate new address** | Optional. Generates a mainnet or testnet Dogecoin address using **LibDogecoin** from the Dogecoin Foundation. Shows public address and private key (WIF); you must store the private key safely — the app does not store it. |
+| **Generate new address** | Optional. Generates a mainnet or testnet Dogecoin address using **LibDogecoin** from the Dogecoin Foundation. Shows public address and private key (WIF); you must store the private key safely ,the app does not store it. |
 | **Device type**    | CPU or GPU (OpenCL). GPU uses your normal drivers. |
 | **Thread count**   | CPU threads (used when GPU is not used or as fallback). |
 | **Mining intensity** | How many hashes per block (e.g. 50K–1M). |
@@ -123,10 +123,10 @@ Mining runs in the background; the web UI shows hashrate, current block, and log
 
 This is an experimental, open project. You can help by:
 
-- **Reporting bugs** — open an issue with steps and (if possible) log/output.
-- **Suggesting features** — e.g. UI, metrics, or protocol tweaks.
-- **Contributing code** — fix bugs, add options, or improve docs (PRs welcome).
-- **Testing** — try different OS, GPUs, and networks (especially testnet P2P) and share what works or breaks.
+- **Reporting bugs** ,open an issue with steps and (if possible) log/output.
+- **Suggesting features** ,e.g. UI, metrics, or protocol tweaks.
+- **Contributing code** ,fix bugs, add options, or improve docs (PRs welcome).
+- **Testing** ,try different OS, GPUs, and networks (especially testnet P2P) and share what works or breaks.
 
 The stack is **Go** (no CGO for the miner core), **OpenCL** for GPU, and a small embedded web UI. Check the source and open issues/PRs on GitHub.
 
@@ -134,7 +134,7 @@ The stack is **Go** (no CGO for the miner core), **OpenCL** for GPU, and a small
 
 ## Author / Credits
 
-**Paulo Vidal** (Dogecoin Foundation Dev) — coded with love for the Dogecoin community.
+**Paulo Vidal** (Dogecoin Foundation Dev) ,coded with love for the Dogecoin community.
 
 | | |
 |---|---|
@@ -155,7 +155,7 @@ The stack is **Go** (no CGO for the miner core), **OpenCL** for GPU, and a small
 
 | Feature        | Description |
 |----------------|-------------|
-| **Hardware**   | Any normal computer — CPU on all OS; GPU (OpenCL) on Windows builds. |
+| **Hardware**   | Any normal computer ,CPU on all OS; GPU (OpenCL) on Windows builds. |
 | **Solo mining**| Yes. No pool. |
 | **Full node**  | Optional. **Pure P2P** = no node; **RPC** = use e.g. Dogecoin Core. |
 | **Blocks**     | Empty blocks (coinbase only). |
