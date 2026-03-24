@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/scrypt"
@@ -66,13 +65,6 @@ type P2PClient struct {
 	bestHeader                 *BlockHeader
 	bestHeight                 int64
 	lastNonMinDifficultyBits   uint32 // last header's nBits when != powLimit (for testnet next-work when tip is min-diff)
-	// tipParentTimestamp is the chain tip's parent's block time (for DigiShield next-work). 0 if unknown.
-	tipParentTimestamp uint32
-	// locatorHashes: recent block hashes (wire order), newest first — used for multi-hash getheaders locators.
-	locatorHashes [][32]byte
-	// lastHeadersAppliedAt updated when a full headers batch successfully commits a new tip (template freshness).
-	lastHeadersAppliedAt time.Time
-	genesisTimestamp     uint32 // parent time for first header after genesis
 	// tipHistory stores the display-order hash of confirmed blocks at each height.
 	// Populated by reading the PrevBlock field of each advancing tip header:
 	// when the tip moves to height H+1, block H's hash = reverse(tip.PrevBlock).
@@ -109,10 +101,6 @@ type P2PClient struct {
 	lastLoggedMsgCount  int       // How many times repeated
 	lastLoggedMsgTime   time.Time // When we last logged it
 	logDedupMutex       sync.Mutex
-	// Serialize all primary-connection I/O (handshake/getheaders/broadcast response reads).
-	primaryIOMux        sync.Mutex
-	// When true, processHeaders does not log tip updates or call logFunc (ephemeral peer probes).
-	silentHeaderApply bool
 }
 
 // PeerInfo holds the version message fields from the connected P2P peer (for web UI).
@@ -516,7 +504,6 @@ var dogeTestnetCheckpoints = map[string]checkpointEntry{
 	"38150909": {38150909, "c428bfe503bea0fccf67a48518346359dd7bc476d52731448c65bd61b129f02f"}, // Block 38150909 (display order from SoChain)
 	"41626399": {41626399, "bce071da382f2064d2c03745e2c259a5fb7666daa8ecfa38f0ac5e6e7b3704c5"}, // Block 41626399 (display order, 2026-03-17)
 	"41634434": {41634434, "c1f08e545ca9a50b53efa86f2950731a1f792c8a435468968d0dbb9f50f4eb0d"}, // Block 41634434 (display order, 2026-03-17 15:30:47 UTC)
-	"42799352": {42799352, "c5d342d702b80d2bc31471dac662f8646de1c51cfbbf0b8afade12fdddbdefac"}, // Block 42799352 (display order, 2026-03-23 16:17:01 UTC)
 	// Note: Testnet has low hashrate and frequent reorgs, so non-genesis checkpoints may become orphaned
 	// Checkpoint hashes are in DISPLAY order (as shown on block explorers); hexTo32Bytes will convert to wire order
 }
@@ -560,7 +547,6 @@ func (p *P2PClient) setNetwork(network string) {
 		p.genesisHashWire = dogeTestnetGenesisWire
 		p.checkpoints = dogeTestnetCheckpoints
 		p.headerRefreshInterval = 500 * time.Millisecond // fast blocks: stay on current tip
-		p.genesisTimestamp = 1393214782 // testnet v3 genesis nTime (chainparams)
 	} else {
 		p.magic = dogeMainnetMagic
 		p.port = dogeMainnetPort
@@ -568,7 +554,6 @@ func (p *P2PClient) setNetwork(network string) {
 		p.genesisHashWire = dogeGenesisHashWire
 		p.checkpoints = dogeMainnetCheckpoints
 		p.headerRefreshInterval = 15 * time.Second
-		p.genesisTimestamp = 1386325540 // mainnet genesis nTime
 	}
 }
 
@@ -606,50 +591,6 @@ func (p *P2PClient) SetPeerOverride(addr string) {
 // Safe to call at any time, including while BroadcastBlock is using the connection.
 func (p *P2PClient) GetCachedTip() *BlockHeader {
 	return p.bestHeader
-}
-
-// GetTipParentTimestamp returns the parent block's nTime for the current tip (for DigiShield). 0 if unknown.
-func (p *P2PClient) GetTipParentTimestamp() uint32 {
-	return p.tipParentTimestamp
-}
-
-const maxLocatorHashes = 16 // hashes in one getheaders message (Core-style short locator)
-
-// prependLocatorHashes adds validated block hashes from one batch (oldest→newest order) to the locator ring.
-func (p *P2PClient) prependLocatorHashesFromBatch(batch [][32]byte) {
-	// batch is oldest->newest; prepend in that order so final ring is newest-first.
-	for i := 0; i < len(batch); i++ {
-		h := batch[i]
-		p.locatorHashes = append([][32]byte{h}, p.locatorHashes...)
-		if len(p.locatorHashes) > 24 {
-			p.locatorHashes = p.locatorHashes[:24]
-		}
-	}
-}
-
-// RefreshHeadersIfStale requests headers when we have not applied a batch recently (mining tip freshness).
-func (p *P2PClient) RefreshHeadersIfStale(maxAge time.Duration) {
-	p.primaryIOMux.Lock()
-	defer p.primaryIOMux.Unlock()
-
-	if maxAge <= 0 {
-		return
-	}
-	if time.Since(p.lastHeadersAppliedAt) < maxAge && p.bestHeader != nil {
-		return
-	}
-	if err := p.ensureConnected(); err != nil {
-		return
-	}
-	_ = p.requestHeaders()
-}
-
-// HeadersAppliedAge returns time since last successful headers batch updated the tip.
-func (p *P2PClient) HeadersAppliedAge() time.Duration {
-	if p.lastHeadersAppliedAt.IsZero() {
-		return 1<<63 - 1
-	}
-	return time.Since(p.lastHeadersAppliedAt)
 }
 
 // GetCachedTipHeight returns the last known tip height (0 if unknown).
@@ -700,9 +641,6 @@ func (p *P2PClient) SetStartCheckpoint(hashHex string, height int64) error {
 		p.startHeight = 0
 		p.bestHeader = nil
 		p.bestHeight = 0
-		p.locatorHashes = nil
-		p.tipParentTimestamp = 0
-		p.lastNonMinDifficultyBits = 0
 		return nil
 	}
 	h, err := hexTo32Bytes(hashHex)
@@ -810,70 +748,6 @@ func (p *P2PClient) tryConnect(addr string) error {
 // sendGetAddr sends a getaddr message (empty payload).
 func (p *P2PClient) sendGetAddr() error {
 	return p.writeMessage("getaddr", nil)
-}
-
-// parseRejectMessage decodes a Bitcoin "reject" message and returns a human-readable reason
-// Format: command (varint string), code (1 byte), reason (varint string), [extra data]
-func (p *P2PClient) parseRejectMessage(payload []byte) string {
-	if len(payload) < 2 {
-		return "malformed reject (too short)"
-	}
-
-	r := bytes.NewReader(payload)
-
-	// Read command (string that was rejected)
-	cmd, err := readString(r)
-	if err != nil {
-		return fmt.Sprintf("reject error: %v", err)
-	}
-
-	// Read code (1 byte)
-	codeByte := make([]byte, 1)
-	if _, err := io.ReadFull(r, codeByte); err != nil {
-		return fmt.Sprintf("reject %s: no code", cmd)
-	}
-	code := codeByte[0]
-
-	// Read reason (string)
-	reason, err := readString(r)
-	if err != nil {
-		reason = "(no reason)"
-	}
-
-	// Map code to name
-	codeNames := map[byte]string{
-		0x01: "REJECT_MALFORMED",
-		0x10: "REJECT_INVALID",
-		0x11: "REJECT_OBSOLETE",
-		0x12: "REJECT_DUPLICATE",
-		0x40: "REJECT_NONSTANDARD",
-		0x41: "REJECT_DUST",
-		0x42: "REJECT_INSUFFICIENTFEE",
-		0x43: "REJECT_CHECKPOINT",
-	}
-
-	codeName, ok := codeNames[code]
-	if !ok {
-		codeName = fmt.Sprintf("UNKNOWN(0x%02x)", code)
-	}
-
-	return fmt.Sprintf("command=%s code=%s reason=%s", cmd, codeName, reason)
-}
-
-// readString reads a varint-prefixed string from a reader
-func readString(r *bytes.Reader) (string, error) {
-	length, err := readVarInt(r)
-	if err != nil {
-		return "", err
-	}
-	if length > 256 {
-		return "", fmt.Errorf("string too long: %d", length)
-	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return "", err
-	}
-	return string(buf), nil
 }
 
 // parseAddrPayload parses a Bitcoin/Dogecoin "addr" message payload and returns "host:port" strings.
@@ -1032,6 +906,8 @@ func (p *P2PClient) ensureConnected() error {
 				log.Printf("P2P: only %d peer(s) left in list, fetching more from DNS seeds...", peersLeft)
 				// Break out of peer-trying loop to trigger DNS seed resolution
 				p.peersMux.Lock()
+				p.knownPeers = nil // Clear remaining peers to force DNS fetch
+				p.peersMux.Unlock()
 			}
 			continue
 		}
@@ -1067,22 +943,10 @@ func (p *P2PClient) ensureConnected() error {
 		// DNS didn't return IPs — try P2P getaddr protocol on each seed
 		fetched := false
 		for _, seed := range p.seeds {
-		// Check if seed is on cooldown (1 hour after failure)
-		p.seedBadListMux.Lock()
-		badTime := p.seedBadList[seed]
-		p.seedBadListMux.Unlock()
-		if !badTime.IsZero() && time.Since(badTime) < 1*time.Hour {
-			continue // Skip this seed, still in cooldown
-		}
-
 			log.Printf("P2P: no peers left, discovering from seed %s via getaddr...", seed)
 			peers, err := p.discoverPeersFromSeed(seed)
 			if err != nil {
 				log.Printf("P2P: seed %s: %v", seed, err)
-			// Mark seed as bad for 1 hour
-			p.seedBadListMux.Lock()
-			p.seedBadList[seed] = time.Now()
-			p.seedBadListMux.Unlock()
 				lastErr = err
 				continue
 			}
@@ -1150,10 +1014,6 @@ func (p *P2PClient) MarkPeerBad(addr string) {
 func (p *P2PClient) ClearSyncState() {
 	p.bestHeader = nil
 	p.bestHeight = 0
-	p.lastNonMinDifficultyBits = 0
-	p.tipParentTimestamp = 0
-	p.locatorHashes = nil
-	p.lastHeadersAppliedAt = time.Time{}
 }
 
 // Disconnect closes the connection and clears state so the next ensureConnected() will reconnect.
@@ -1239,9 +1099,6 @@ func (p *P2PClient) readMessage() (string, []byte, error) {
 		log.Printf("P2P DEBUG: Magic mismatch from %s", p.peerAddr)
 		log.Printf("  Received: %02x %02x %02x %02x", receivedMagic[0], receivedMagic[1], receivedMagic[2], receivedMagic[3])
 		log.Printf("  Expected: %02x %02x %02x %02x (%s)", p.magic[0], p.magic[1], p.magic[2], p.magic[3], p.network)
-		// Stream is desynchronized (or wrong network peer). Hard-reset connection so we don't keep
-		// parsing random bytes as endless "magic mismatch" spam.
-		p.disconnect()
 		return "", nil, fmt.Errorf("invalid magic in P2P header: got %02x %02x %02x %02x, expected %02x %02x %02x %02x (network: %s)", 
 			receivedMagic[0], receivedMagic[1], receivedMagic[2], receivedMagic[3], 
 			p.magic[0], p.magic[1], p.magic[2], p.magic[3],
@@ -1274,8 +1131,6 @@ func (p *P2PClient) readMessage() (string, []byte, error) {
 	ck := sha256.Sum256(payload)
 	ck = sha256.Sum256(ck[:])
 	if !bytes.Equal(hdr[20:24], ck[0:4]) {
-		// Bad checksum means we're out of sync with this stream; reconnect to recover cleanly.
-		p.disconnect()
 		return "", nil, fmt.Errorf("invalid checksum for %s", command)
 	}
 
@@ -1339,12 +1194,7 @@ func (p *P2PClient) handshake() error {
 	if !gotVerack {
 		return fmt.Errorf("P2P handshake failed: no verack received within 15s")
 	}
-
-	// BIP130: prefer header announcements (Core-like); empty payload.
-	if err := p.writeMessage("sendheaders", nil); err != nil {
-		return err
-	}
-
+	
 	// After handshake, briefly drain any immediate unsolicited messages (sendheaders, inv, addr, etc.)
 	// Many peers send these automatically; we need to drain them before sending getheaders
 	// Using 1 second timeout to ensure we consume all immediate messages
@@ -1433,9 +1283,6 @@ func (p *P2PClient) sendVersion() error {
 
 // GetTipHeader fetches headers (from our last known point or from genesis) and returns the best header.
 func (p *P2PClient) GetTipHeader() (*BlockHeader, error) {
-	p.primaryIOMux.Lock()
-	defer p.primaryIOMux.Unlock()
-
 	if err := p.ensureConnected(); err != nil {
 		return nil, err
 	}
@@ -1528,9 +1375,6 @@ func (p *P2PClient) backgroundHeaderSyncLoop() {
 // fetchHeadersInBackground fetches headers from peer without throttling.
 // Called from background sync goroutine to keep bestHeader current.
 func (p *P2PClient) fetchHeadersInBackground() {
-	p.primaryIOMux.Lock()
-	defer p.primaryIOMux.Unlock()
-
 	if err := p.ensureConnected(); err != nil {
 		// Silent failure - we'll reconnect on next attempt
 		return
@@ -1545,10 +1389,6 @@ func (p *P2PClient) fetchHeadersInBackground() {
 		return
 	}
 
-	// If our primary peer is lagging behind the network, probe a few additional peers and
-	// switch primary to a fresher one automatically.
-	p.fetchHeadersFromBroadcastPeers()
-
 	// Debug: log if height changed
 	if p.bestHeight > heightBefore {
 		log.Printf("[BG SYNC] Updated tip: %d → %d", heightBefore, p.bestHeight)
@@ -1558,157 +1398,63 @@ func (p *P2PClient) fetchHeadersInBackground() {
 // fetchHeadersFromBroadcastPeers attempts to get headers from broadcast pool peers in parallel
 // This supplements the primary connection for faster header sync
 func (p *P2PClient) fetchHeadersFromBroadcastPeers() {
-	type peerTipProbe struct {
-		addr   string
-		height int64
-		err    error
-	}
-
-	// Build candidate set from broadcast pool + known peers.
-	candidatesMap := make(map[string]struct{}, 32)
 	p.broadcastMux.RLock()
+	// Copy addresses to avoid holding lock during connections
+	peers := make([]string, 0, len(p.broadcastConns))
 	for addr := range p.broadcastConns {
-		candidatesMap[addr] = struct{}{}
+		peers = append(peers, addr)
 	}
 	p.broadcastMux.RUnlock()
 
-	p.peersMux.Lock()
-	for i := 0; i < len(p.knownPeers) && i < 12; i++ {
-		candidatesMap[p.knownPeers[i]] = struct{}{}
-	}
-	currentPeer := p.peerAddr
-	p.peersMux.Unlock()
-	if currentPeer != "" {
-		candidatesMap[currentPeer] = struct{}{}
-	}
-
-	if len(candidatesMap) == 0 {
-		return
-	}
-
-	peers := make([]string, 0, len(candidatesMap))
-	for addr := range candidatesMap {
-		if !p.isBadPeer(addr) {
-			peers = append(peers, addr)
-		}
-	}
 	if len(peers) == 0 {
-		return
+		return // No broadcast peers available
 	}
-	rand.Shuffle(len(peers), func(i, j int) { peers[i], peers[j] = peers[j], peers[i] })
 
-	maxTry := 4
+	// Try to get headers from up to 3 fastest broadcast peers in parallel
+	maxTry := 3
 	if len(peers) < maxTry {
 		maxTry = len(peers)
 	}
-	results := make(chan peerTipProbe, maxTry)
 
+	done := make(chan bool, maxTry)
 	for i := 0; i < maxTry; i++ {
 		go func(peerAddr string) {
-			h, err := p.probePeerTipHeight(peerAddr)
-			results <- peerTipProbe{addr: peerAddr, height: h, err: err}
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("⚠️ Header fetch panic from %s (recovered): %v", peerAddr, r)
+				}
+				done <- true
+			}()
+
+			// Attempt quick header request from this peer
+			p.broadcastMux.RLock()
+			conn := p.broadcastConns[peerAddr]
+			p.broadcastMux.RUnlock()
+
+			if conn == nil {
+				return // Connection was closed
+			}
+
+			// Send getheaders (non-blocking, with timeout)
+			if err := p.sendGetHeaders(); err == nil {
+				// Log if we got headers from broadcast peer
+				if p.bestHeight > 0 {
+					log.Printf("📡 Headers synced via broadcast peer %s (height: %d)", peerAddr, p.bestHeight)
+				}
+			}
 		}(peers[i])
 	}
 
-	bestAddr := ""
-	bestHeight := p.bestHeight
-	okCount := 0
+	// Wait for attempts to complete (up to 5 seconds)
+	timeout := time.NewTimer(5 * time.Second)
 	for i := 0; i < maxTry; i++ {
-		res := <-results
-		if res.err != nil {
-			continue
-		}
-		okCount++
-		if res.height > bestHeight {
-			bestHeight = res.height
-			bestAddr = res.addr
+		select {
+		case <-done:
+		case <-timeout.C:
+			return
 		}
 	}
-	if okCount == 0 || bestAddr == "" {
-		return
-	}
-
-	// Switch only when clearly ahead to avoid flip-flopping.
-	if bestHeight >= p.bestHeight+3 && bestAddr != currentPeer {
-		log.Printf("P2P: primary peer %s appears behind (tip=%d). Switching to fresher peer %s (tip=%d)",
-			currentPeer, p.bestHeight, bestAddr, bestHeight)
-		p.SetPeerOverride(bestAddr)
-		p.disconnect()
-		if err := p.ensureConnected(); err == nil {
-			_ = p.requestHeaders()
-		}
-	}
-}
-
-// probePeerTipHeight performs a lightweight handshake + single getheaders to estimate a peer's tip height.
-func (p *P2PClient) probePeerTipHeight(addr string) (int64, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 0, err
-	}
-	conn, connectedAddr, err := dialPreferredIPv4(host, port, 4*time.Second)
-	if err != nil {
-		return 0, err
-	}
-	defer conn.Close()
-
-	// Temporary client: own tip snapshot + silent header apply so processHeaders never logs bogus "main tip" lines.
-	var tipCopy *BlockHeader
-	if p.bestHeader != nil {
-		c := *p.bestHeader
-		tipCopy = &c
-	}
-	pc := &P2PClient{
-		network:                  p.network,
-		magic:                    p.magic,
-		port:                     p.port,
-		genesisHashWire:          p.genesisHashWire,
-		checkpoints:              p.checkpoints,
-		genesisTimestamp:         p.genesisTimestamp,
-		conn:                     conn,
-		peerAddr:                 connectedAddr,
-		bestHeader:               tipCopy,
-		bestHeight:               p.bestHeight,
-		lastNonMinDifficultyBits: p.lastNonMinDifficultyBits,
-		tipParentTimestamp:       p.tipParentTimestamp,
-		silentHeaderApply:        true,
-	}
-	pc.locatorHashes = append(pc.locatorHashes, p.locatorHashes...)
-	pc.hasStartCheckpoint = p.hasStartCheckpoint
-	pc.startLocatorHash = p.startLocatorHash
-	pc.startHeight = p.startHeight
-
-	if err := pc.handshake(); err != nil {
-		return 0, err
-	}
-	if err := pc.sendGetHeaders(); err != nil {
-		return 0, err
-	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(1200 * time.Millisecond))
-	for {
-		cmd, payload, err := pc.readMessage()
-		if err != nil {
-			return 0, err
-		}
-		switch cmd {
-		case "headers":
-			count, err := pc.processHeaders(payload)
-			if err != nil {
-				return 0, err
-			}
-			if count == 0 {
-				return pc.bestHeight, nil
-			}
-			return pc.bestHeight, nil
-		case "ping":
-			_ = pc.writeMessage("pong", payload)
-		case "version":
-			_ = pc.writeMessage("verack", nil)
-		default:
-			// ignore
-		}
-	}
+	timeout.Stop()
 }
 
 // GetLastNonMinDifficultyBits returns the last header nBits seen that was not min-difficulty (powLimit).
@@ -1727,43 +1473,22 @@ func (p *P2PClient) SeedLastNonMinDifficultyBits(bits uint32) {
 
 const maxHeadersPerMessage = 2000 // Bitcoin/Dogecoin send at most 2000 headers per "headers" message
 
-// sendGetHeaders sends getheaders with a short multi-hash locator (tip, recent ancestors, checkpoint) like Bitcoin Core.
+// sendGetHeaders sends a single getheaders message with current best known block (or checkpoint/genesis).
 func (p *P2PClient) sendGetHeaders() error {
 	var buf bytes.Buffer
 	const protocolVersion int32 = 70015
 
 	binary.Write(&buf, binary.LittleEndian, protocolVersion)
+	writeVarInt(&buf, 1)
 
-	seen := make(map[[32]byte]struct{}, 24)
-	var loc [][32]byte
-	add := func(h [32]byte) {
-		if _, ok := seen[h]; ok {
-			return
-		}
-		seen[h] = struct{}{}
-		loc = append(loc, h)
+	locatorBytes := make([]byte, 32)
+	if p.bestHeader != nil {
+		copy(locatorBytes, p.bestHeader.Hash[:]) // internal order, no reverse
+	} else if p.hasStartCheckpoint {
+		copy(locatorBytes, p.startLocatorHash[:]) // checkpoints stored in wire order, send as-is
 	}
-
-	if len(p.locatorHashes) > 0 {
-		for i := 0; i < len(p.locatorHashes) && len(loc) < maxLocatorHashes; i++ {
-			add(p.locatorHashes[i])
-		}
-	} else if p.bestHeader != nil {
-		var h [32]byte
-		copy(h[:], p.bestHeader.Hash[:])
-		add(h)
-	}
-	if p.hasStartCheckpoint && len(loc) < maxLocatorHashes {
-		add(p.startLocatorHash)
-	}
-	if len(loc) == 0 {
-		add([32]byte{}) // genesis
-	}
-
-	writeVarInt(&buf, uint64(len(loc)))
-	for _, h := range loc {
-		buf.Write(h[:])
-	}
+	// else genesis: locatorBytes stays zero
+	buf.Write(locatorBytes)
 	buf.Write(make([]byte, 32)) // stop hash = zero (no stop)
 
 	return p.writeMessage("getheaders", buf.Bytes())
@@ -1837,14 +1562,6 @@ func (p *P2PClient) requestHeaders() error {
 			case "getdata":
 				// Peer asking for blocks/transactions we announced
 				p.logDeduplicated("received getdata request (ignored - not a server)")
-			case "reject":
-				// Parse reject message to see why peer rejected our block
-				reason := p.parseRejectMessage(payload)
-				log.Printf("⚠️ P2P REJECT from %s: %s", p.peerAddr, reason)
-			case "feefilter":
-				// BIP133 — payload is 8-byte fee rate; ignore (keeps stream aligned)
-			case "sendheaders":
-				// BIP130 — peers may echo; empty payload
 			default:
 				// Gracefully ignore unknown messages without disconnecting
 				p.logDeduplicated(fmt.Sprintf("ignoring unknown message type: %s", cmd))
@@ -1887,9 +1604,6 @@ func (p *P2PClient) processHeaders(payload []byte) (int, error) {
 	}
 	var lastHeader *BlockHeader
 	n := int(count)
-	carryLastNonMin := p.lastNonMinDifficultyBits
-	var locatorBatch [][32]byte
-	var parentTSForTip uint32
 
 	// Expected previous block hash for chain validation. prevBlock on the wire is in wire/internal order.
 	// Our computed Hash and checkpoint hashes are stored in that order.
@@ -1901,15 +1615,6 @@ func (p *P2PClient) processHeaders(payload []byte) (int, error) {
 	} else {
 		// Starting from genesis: first header (block 1) has prevBlock = genesis block hash
 		copy(expectedPrev[:], p.genesisHashWire[:])
-	}
-
-	parentTS := uint32(0)
-	if p.bestHeader != nil {
-		parentTS = p.bestHeader.Timestamp
-	} else if p.hasStartCheckpoint {
-		parentTS = 0
-	} else {
-		parentTS = p.genesisTimestamp
 	}
 
 	for i := uint64(0); i < count; i++ {
@@ -1940,17 +1645,21 @@ func (p *P2PClient) processHeaders(payload []byte) (int, error) {
 		h.Timestamp = binary.LittleEndian.Uint32(headerBytes[68:72])
 		h.Bits = binary.LittleEndian.Uint32(headerBytes[72:76])
 		h.Nonce = binary.LittleEndian.Uint32(headerBytes[76:80])
-
-		// Chain validation (like the wallet): prevBlock must link to previous header or our locator
-		if !bytes.Equal(h.PrevBlock[:], expectedPrev[:]) {
-			debugInfo := ""
-			if p.hasStartCheckpoint && lastHeader == nil {
-				debugInfo = fmt.Sprintf(" [started from checkpoint height %d, hash %s]",
-					p.startHeight, hex.EncodeToString(p.startLocatorHash[:]))
-			}
-			return 0, fmt.Errorf("non-continuous headers: at height %d prevBlock %s does not link (expected %s)%s (on testnet this can be due to reorgs, orphaned tips, or very fast blocks)",
-				height, hex.EncodeToString(h.PrevBlock[:]), hex.EncodeToString(expectedPrev[:]), debugInfo)
+		if h.Bits != dogecoinPowLimitCompact {
+			p.lastNonMinDifficultyBits = h.Bits
 		}
+
+	// Chain validation (like the wallet): prevBlock must link to previous header or our locator
+	if !bytes.Equal(h.PrevBlock[:], expectedPrev[:]) {
+		// Debug: show what checkpoint we started from
+		debugInfo := ""
+		if p.hasStartCheckpoint && lastHeader == nil {
+			debugInfo = fmt.Sprintf(" [started from checkpoint height %d, hash %s]", 
+				p.startHeight, hex.EncodeToString(p.startLocatorHash[:]))
+		}
+		return 0, fmt.Errorf("non-continuous headers: at height %d prevBlock %s does not link (expected %s)%s (on testnet this can be due to reorgs, orphaned tips, or very fast blocks)",
+			height, hex.EncodeToString(h.PrevBlock[:]), hex.EncodeToString(expectedPrev[:]), debugInfo)
+	}
 
 		// Block hash for chain linkage (prevBlock) is double-SHA256 of header (Dogecoin GetHash()), not Scrypt
 		hash := blockHashChain(headerBytes)
@@ -1958,19 +1667,9 @@ func (p *P2PClient) processHeaders(payload []byte) (int, error) {
 			copy(h.Hash[:], hash)
 		}
 
-		parentTSForTip = parentTS
-		if h.Bits != dogecoinPowLimitCompact {
-			carryLastNonMin = h.Bits
-		}
-
-		var hw [32]byte
-		copy(hw[:], h.Hash[:])
-		locatorBatch = append(locatorBatch, hw)
-
 		// Next header's prevBlock must equal this block's hash (same natural byte order on wire)
 		copy(expectedPrev[:], h.Hash[:])
 		lastHeader = h
-		parentTS = h.Timestamp
 
 		// Record block hash in tipHistory for payment monitor (pure P2P confirmation).
 		// Only keep the most recent 500 heights to cap memory usage.
@@ -1994,13 +1693,8 @@ func (p *P2PClient) processHeaders(payload []byte) (int, error) {
 	if lastHeader != nil {
 		p.bestHeader = lastHeader
 		p.bestHeight = lastHeader.Height
-		p.lastNonMinDifficultyBits = carryLastNonMin
-		p.tipParentTimestamp = parentTSForTip
-		p.lastHeadersAppliedAt = time.Now()
-		p.prependLocatorHashesFromBatch(locatorBatch)
 		// Only log when we've reached the actual tip (last batch); during sync we get 2000 headers per batch and skip logging to avoid flood
-		// Ephemeral probe clients must not log: their tip is that peer's chain view, not our main client's cached tip.
-		if n < maxHeadersPerMessage && !p.silentHeaderApply {
+		if n < maxHeadersPerMessage {
 			hashDisplay := HashToDisplayHex(p.bestHeader.Hash[:])
 			log.Printf("P2P: updated tip to height %d (hash %s)", p.bestHeight, hashDisplay)
 			if p.logFunc != nil {
@@ -2106,14 +1800,7 @@ func skipTransaction(r *bytes.Reader) error {
 // startBroadcastPoolMaintainer runs in background every 30 seconds to keep broadcast connections alive
 // This pre-warms the pool so blocks can be sent immediately, rather than waiting for the pool to build (Step 5)
 func (p *P2PClient) startBroadcastPoolMaintainer() {
-	// Warm immediately so first found block has fallback peers ready.
-	p.maintainBroadcastConnections()
-
-	interval := 30 * time.Second
-	if p.network == "testnet" {
-		interval = 5 * time.Second
-	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -2303,85 +1990,45 @@ func (p *P2PClient) maintainBroadcastConnections() {
 		}
 	}()
 	
-	// Keep lock time short: snapshot state, connect outside lock, then commit.
 	p.broadcastMux.Lock()
+	defer p.broadcastMux.Unlock()
+	
+	// Close dead connections (non-blocking checks only)
 	for addr, conn := range p.broadcastConns {
 		if conn == nil {
 			delete(p.broadcastConns, addr)
-		}
-	}
-	current := len(p.broadcastConns)
-	connected := make(map[string]struct{}, current)
-	for addr := range p.broadcastConns {
-		connected[addr] = struct{}{}
-	}
-	p.broadcastMux.Unlock()
-
-	if current >= p.maxBroadcastPeers {
-		return
-	}
-
-	needed := p.maxBroadcastPeers - current
-	if needed <= 0 {
-		return
-	}
-
-	// Build candidate list: override + primary + known peers.
-	candidates := make([]string, 0, 16)
-	p.peersMux.Lock()
-	override := strings.TrimSpace(p.optionalPeerOverride)
-	primary := p.peerAddr
-	known := make([]string, len(p.knownPeers))
-	copy(known, p.knownPeers)
-	p.peersMux.Unlock()
-	if override != "" {
-		candidates = append(candidates, override)
-	}
-	if primary != "" {
-		candidates = append(candidates, primary)
-	}
-	candidates = append(candidates, known...)
-	candidates = p.filterBadPeers(candidates)
-
-	// Deduplicate and skip peers already connected in pool.
-	seen := make(map[string]struct{}, len(candidates))
-	toTry := make([]string, 0, len(candidates))
-	for _, addr := range candidates {
-		if addr == "" {
 			continue
 		}
-		if _, ok := seen[addr]; ok {
-			continue
-		}
-		seen[addr] = struct{}{}
-		if _, ok := connected[addr]; ok {
-			continue
-		}
-		toTry = append(toTry, addr)
+		// Skip health check during maintenance - just keep connections
+		// Health will be verified during actual broadcast
 	}
-
-	// Connect up to needed peers (outside lock).
-	added := 0
-	for i := 0; i < len(toTry) && added < needed; i++ {
-		addr := toTry[i]
-		conn, err := p.connectBroadcastPeer(addr)
-		if err != nil {
-			log.Printf("P2P: failed to connect to broadcast peer %s: %v", addr, err)
-			p.markBadPeer(addr)
-			p.updatePeerResult(addr, false, "")
-			continue
-		}
-
-		p.broadcastMux.Lock()
-		if p.broadcastConns[addr] == nil {
-			p.broadcastConns[addr] = conn
-			added++
-			log.Printf("P2P: added broadcast peer %s (total: %d)", addr, len(p.broadcastConns))
-			conn = nil
-		}
-		p.broadcastMux.Unlock()
-		if conn != nil {
-			_ = conn.Close()
+	
+	// Add new connections if below max
+	if len(p.broadcastConns) < p.maxBroadcastPeers {
+		p.peersMux.Lock()
+		availablePeers := make([]string, len(p.knownPeers))
+		copy(availablePeers, p.knownPeers)
+		p.peersMux.Unlock()
+		
+		// Filter bad peers
+		availablePeers = p.filterBadPeers(availablePeers)
+		
+		needed := p.maxBroadcastPeers - len(p.broadcastConns)
+		for i := 0; i < needed && i < len(availablePeers); i++ {
+			addr := availablePeers[i]
+			if p.broadcastConns[addr] != nil {
+				continue // already connected
+			}
+			// Connect with proper P2P handshake (version/verack)
+			conn, err := p.connectBroadcastPeer(addr)
+			if err == nil {
+				p.broadcastConns[addr] = conn
+				log.Printf("P2P: added broadcast peer %s (total: %d)", addr, len(p.broadcastConns))
+			} else {
+				log.Printf("P2P: failed to connect to broadcast peer %s: %v", addr, err)
+				p.markBadPeer(addr)
+				p.updatePeerResult(addr, false, "")
+			}
 		}
 	}
 }
@@ -2435,9 +2082,6 @@ func (p *P2PClient) sendBlockToPeer(conn net.Conn, addr string, blockBytes []byt
 
 // BroadcastBlock sends a mined block to ALL connected peers for fast network propagation
 func (p *P2PClient) BroadcastBlock(block *Block) error {
-	p.primaryIOMux.Lock()
-	defer p.primaryIOMux.Unlock()
-
 	// Add panic recovery to prevent crashes during block broadcast
 	defer func() {
 		if r := recover(); r != nil {
@@ -2458,21 +2102,19 @@ func (p *P2PClient) BroadcastBlock(block *Block) error {
 	if err != nil {
 		return fmt.Errorf("failed to decode block hex: %v", err)
 	}
-	// Expected chain hash for this block (what peers use in inv/reject payloads).
-	header80 := block.SerializeHeader()
-	expectedChainHash := blockHashChain(header80) // wire order
-	expectedChainHashDisplay := HashToDisplayHex(expectedChainHash)
-	// PoW hash (scrypt) is what miners compare to target; chain hash (double-SHA256) is what P2P inv/reject references.
-	powHash := dogeHeaderHash(header80)
-	powHashDisplay := HashToDisplayHex(powHash)
-	log.Printf("P2P broadcast: candidate hashes => chain(dSHA256/display)=%s ; pow(scrypt/display)=%s",
-		expectedChainHashDisplay, powHashDisplay)
-
-	// Critical: do not block relay on maintainBroadcastConnections() — it dials/handshakes peers
-	// sequentially and can take many seconds. On fast testnet the chain moves several blocks/sec,
-	// so delay here often orphans an otherwise valid block. Pool warm-up runs in the background
-	// ticker; we only use sockets that are already live + opportunistic dials if send count is 0.
-
+	
+	// Ensure we have broadcast connections (with timeout to prevent hanging)
+	done := make(chan bool, 1)
+	go func() {
+		p.maintainBroadcastConnections()
+		done <- true
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		log.Printf("⚠️ maintainBroadcastConnections timeout, continuing with existing connections")
+	}
+	
 	// Send to primary connection
 	sentToPrimary := false
 	primaryAddr := ""
@@ -2492,22 +2134,6 @@ func (p *P2PClient) BroadcastBlock(block *Block) error {
 			}
 		}()
 	}
-	// Primary socket can die between mining and submit on fast testnet. Reconnect and retry once.
-	if !sentToPrimary {
-		oldPrimary := primaryAddr
-		p.disconnect()
-		if err := p.ensureConnected(); err == nil && p.conn != nil {
-			primaryAddr = p.peerAddr
-			if err := p.writeMessage("block", blockBytes); err == nil {
-				sentToPrimary = true
-				log.Printf("P2P broadcast: primary retry succeeded on %s (%d bytes)", primaryAddr, len(blockBytes))
-			} else {
-				log.Printf("P2P broadcast: primary retry failed on %s: %v", primaryAddr, err)
-			}
-		} else if err != nil {
-			log.Printf("P2P broadcast: primary reconnect failed after send failure (old primary=%s): %v", oldPrimary, err)
-		}
-	}
 	
 	// Send to all broadcast connections
 	p.broadcastMux.RLock()
@@ -2517,19 +2143,13 @@ func (p *P2PClient) BroadcastBlock(block *Block) error {
 	}
 	p.broadcastMux.RUnlock()
 	
-	var successCount int32
+	successCount := 0
 	if sentToPrimary {
-		atomic.AddInt32(&successCount, 1)
+		successCount++
 	}
-
-	var fanoutWg sync.WaitGroup
+	
 	for _, addr := range broadcastAddrs {
-		if primaryAddr != "" && addr == primaryAddr {
-			continue // same socket as primary; avoid double send + inflated peer count
-		}
-		fanoutWg.Add(1)
-		go func(peerAddr string) {
-			defer fanoutWg.Done()
+		func(peerAddr string) {
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("⚠️ Panic broadcasting to %s (recovered): %v", peerAddr, r)
@@ -2545,12 +2165,15 @@ func (p *P2PClient) BroadcastBlock(block *Block) error {
 			}
 
 			if err := p.sendBlockToPeer(conn, peerAddr, blockBytes); err == nil {
-				atomic.AddInt32(&successCount, 1)
+				successCount++
 				log.Printf("P2P broadcast: sent block to peer %s (%d bytes)", peerAddr, len(blockBytes))
+				// Track successful broadcast (Step 6)
 				p.updatePeerResult(peerAddr, true, "")
 			} else {
 				log.Printf("P2P broadcast: failed to send block to %s: %v", peerAddr, err)
+				// Track failed broadcast (Step 6)
 				p.updatePeerResult(peerAddr, false, "")
+				// Remove failed connection (with safety check)
 				p.broadcastMux.Lock()
 				if conn := p.broadcastConns[peerAddr]; conn != nil {
 					conn.Close()
@@ -2560,143 +2183,38 @@ func (p *P2PClient) BroadcastBlock(block *Block) error {
 			}
 		}(addr)
 	}
-	fanoutWg.Wait()
-
-	// If nothing worked, briefly try to add broadcast peers (capped) then retry primary once.
-	if atomic.LoadInt32(&successCount) == 0 {
-		done := make(chan bool, 1)
-		go func() {
-			p.maintainBroadcastConnections()
-			done <- true
-		}()
-		select {
-		case <-done:
-		case <-time.After(800 * time.Millisecond):
-			log.Printf("P2P broadcast: pool warm-up capped at 800ms")
-		}
-		if !sentToPrimary && p.conn != nil {
-			if err := p.writeMessage("block", blockBytes); err == nil {
-				sentToPrimary = true
-				atomic.AddInt32(&successCount, 1)
-				log.Printf("P2P broadcast: sent block to primary peer %s (retry after warm-up, %d bytes)", p.peerAddr, len(blockBytes))
-			}
-		}
-		if atomic.LoadInt32(&successCount) == 0 {
-			p.broadcastMux.RLock()
-			addrRetry := make([]string, 0, len(p.broadcastConns))
-			for a := range p.broadcastConns {
-				addrRetry = append(addrRetry, a)
-			}
-			p.broadcastMux.RUnlock()
-			var w2 sync.WaitGroup
-			for _, a := range addrRetry {
-				if primaryAddr != "" && a == primaryAddr {
-					continue
-				}
-				w2.Add(1)
-				go func(peerAddr string) {
-					defer w2.Done()
-					p.broadcastMux.RLock()
-					c := p.broadcastConns[peerAddr]
-					p.broadcastMux.RUnlock()
-					if c == nil {
-						return
-					}
-					if err := p.sendBlockToPeer(c, peerAddr, blockBytes); err == nil {
-						atomic.AddInt32(&successCount, 1)
-						log.Printf("P2P broadcast: sent block to peer %s (post warm-up, %d bytes)", peerAddr, len(blockBytes))
-						p.updatePeerResult(peerAddr, true, "")
-					}
-				}(a)
-			}
-			w2.Wait()
-		}
-	}
-
-	if atomic.LoadInt32(&successCount) == 0 {
-		p.peersMux.Lock()
-		candidates := make([]string, 0, len(p.knownPeers))
-		for i := 0; i < len(p.knownPeers) && i < 3; i++ {
-			if p.knownPeers[i] != "" {
-				candidates = append(candidates, p.knownPeers[i])
-			}
-		}
-		p.peersMux.Unlock()
-
-		for _, addr := range candidates {
-			if primaryAddr != "" && addr == primaryAddr {
-				continue
-			}
-			if p.isBadPeer(addr) {
-				continue
-			}
-			conn, err := p.connectBroadcastPeer(addr)
-			if err != nil {
-				continue
-			}
-			if err := p.sendBlockToPeer(conn, addr, blockBytes); err == nil {
-				atomic.AddInt32(&successCount, 1)
-				log.Printf("P2P broadcast: opportunistic send succeeded to %s (%d bytes)", addr, len(blockBytes))
-			}
-			_ = conn.Close()
-		}
-	}
-
-	okPeers := int(atomic.LoadInt32(&successCount))
-	log.Printf("P2P broadcast: sent to %d peer(s) total (%d bytes each)", okPeers, len(blockBytes))
+	
+	log.Printf("P2P broadcast: sent to %d peer(s) total (%d bytes each)", successCount, len(blockBytes))
 	if p.logFunc != nil {
-		p.logFunc(fmt.Sprintf("P2P: Block broadcast to %d peer(s)", okPeers))
+		p.logFunc(fmt.Sprintf("P2P: Block broadcast to %d peer(s)", successCount))
 	}
 
-	// Wait for and log primary peer's response (reject = definite failure; inv-of-our-hash = strong acceptance signal).
+	// Wait for and log primary peer's response (reject = no reward; no reject = may be accepted)
 	primaryResponse := "send failed"
 	if sentToPrimary && primaryAddr != "" {
 		primaryResponse = "no response (timeout/closed)"
 	}
 	var rejectErr error
-	sawSelfInv := false
-	responseMsgs := 0
-	headersMsgCount := 0
-	headersEntryTotal := 0
-	invMsgCount := 0
-	responseStart := time.Now()
 	if p.conn != nil && sentToPrimary {
-		readBudget := 6 * time.Second
-		maxReplies := 12
-		if p.network == "testnet" {
-			readBudget = 1500 * time.Millisecond
-			maxReplies = 8
-		}
 		if c, ok := p.conn.(interface{ SetReadDeadline(time.Time) error }); ok {
-			c.SetReadDeadline(time.Now().Add(readBudget))
+			c.SetReadDeadline(time.Now().Add(3 * time.Second))
 			defer func() {
 				if c2, ok := p.conn.(interface{ SetReadDeadline(time.Time) error }); ok {
 					c2.SetReadDeadline(time.Time{}) // clear deadline
 				}
 			}()
 		}
-		for i := 0; i < maxReplies; i++ { // read a few messages; fast testnet peers may flood headers (not an ACK for your block)
+		for i := 0; i < 5; i++ { // read up to 5 messages to allow for pings
 			cmd, payload, readErr := p.readMessage()
 			if readErr != nil {
 				log.Printf("P2P broadcast [node response]: primary peer %s — read ended: %v (block may still propagate via other peers)", primaryAddr, readErr)
 				primaryResponse = fmt.Sprintf("read error: %v", readErr)
 				break
 			}
-			responseMsgs++
 			if cmd == "reject" {
-				msgType, code, reason, rejectedHash, parseErr := parseRejectPayload(payload)
+				msgType, code, reason, _, parseErr := parseRejectPayload(payload)
 				if parseErr == nil && msgType == "block" {
-					rejectedDisplay := ""
-					if len(rejectedHash) == 32 {
-						rejectedDisplay = HashToDisplayHex(rejectedHash)
-					}
-					if rejectedDisplay != "" {
-						log.Printf("P2P broadcast [node response]: primary peer %s REJECTED block — reason=%q code=0x%02x rejectedHash=%s (you get no reward for this block)",
-							primaryAddr, reason, code, rejectedDisplay)
-					} else {
-						log.Printf("P2P broadcast [node response]: primary peer %s REJECTED block — reason=%q code=0x%02x (you get no reward for this block)",
-							primaryAddr, reason, code)
-					}
+					log.Printf("P2P broadcast [node response]: primary peer %s REJECTED block — reason: %q, reject code: 0x%02x (you get no reward for this block)", primaryAddr, reason, code)
 					primaryResponse = fmt.Sprintf("rejected: %s (0x%02x)", reason, code)
 					rejectErr = fmt.Errorf("block rejected by peer: %s (reject code 0x%02x)", reason, code)
 					break
@@ -2706,100 +2224,30 @@ func (p *P2PClient) BroadcastBlock(block *Block) error {
 				_ = p.writeMessage("pong", payload)
 				continue
 			}
-			switch cmd {
-			case "inv":
-				invMsgCount++
-				_, matched, parseErr := parseInvForBlock(payload, expectedChainHash)
-				if parseErr != nil {
-					log.Printf("P2P broadcast [node response]: primary peer %s — \"inv\" parse error: %v", primaryAddr, parseErr)
-				} else if matched {
-					sawSelfInv = true
-					log.Printf("P2P broadcast [node response]: primary peer %s — \"inv\" includes our block hash %s ✅", primaryAddr, expectedChainHashDisplay)
-				}
-			case "headers":
-				headersMsgCount++
-				if count, err := parseHeadersCount(payload); err == nil {
-					headersEntryTotal += count
-				}
-			default:
-				log.Printf("P2P broadcast [node response]: primary peer %s — received %q (%d bytes)", primaryAddr, cmd, len(payload))
-			}
+			// inv/getheaders/etc — keep reading; node may send "reject" after "inv"
+			log.Printf("P2P broadcast [node response]: primary peer %s — received %q; still waiting for potential reject...", primaryAddr, cmd)
 			if primaryResponse == "no response (timeout/closed)" {
-				primaryResponse = "no reject yet (processing other messages)"
+				primaryResponse = "no reject (accepted or other)"
 			}
 		}
-		if headersMsgCount > 0 {
-			log.Printf("P2P broadcast: primary peer sent %d \"headers\" messages (~%d header entries) after our block — this is normal fast-chain tip traffic, NOT a confirmation your block won the fork",
-				headersMsgCount, headersEntryTotal)
-		}
-		if invMsgCount > 0 && !sawSelfInv {
-			log.Printf("P2P broadcast: saw %d \"inv\" message(s) from primary; none matched our chain hash (still OK — inv is often for other blocks)", invMsgCount)
-		}
-		if rejectErr == nil && sawSelfInv {
-			primaryResponse = "peer re-announced our block hash (strong acceptance signal)"
-		} else if rejectErr == nil && primaryResponse == "no response (timeout/closed)" {
-			log.Printf("P2P broadcast [node response]: primary peer %s — no reject in read window (acceptance still unconfirmed)", primaryAddr)
-			primaryResponse = "no reject in read window (unconfirmed)"
-		} else if rejectErr == nil && headersMsgCount > 0 && !sawSelfInv {
-			primaryResponse = "no reject; peer sent tip headers (not a reward/acceptance proof — check explorer / best chain)"
+		if rejectErr == nil && primaryResponse == "no response (timeout/closed)" {
+			log.Printf("P2P broadcast [node response]: primary peer %s — no reject message within 3s (node may have accepted block or connection closed)", primaryAddr)
+			primaryResponse = "no reject in 3s"
 		}
 	} else if sentToPrimary {
 		primaryResponse = "sent (response not checked)"
 	}
 
-	log.Printf("P2P broadcast diagnostics: peer=%s msgs=%d window=%.2fs expectedHash=%s",
-		primaryAddr, responseMsgs, time.Since(responseStart).Seconds(), expectedChainHashDisplay)
-	log.Printf("P2P broadcast summary: sent to %d peer(s). Primary peer (%s): %s", okPeers, primaryAddr, primaryResponse)
+	log.Printf("P2P broadcast summary: sent to %d peer(s). Primary peer (%s): %s", successCount, primaryAddr, primaryResponse)
 	if rejectErr != nil {
 		return rejectErr
 	}
 
-	if okPeers == 0 {
+	if successCount == 0 {
 		return fmt.Errorf("failed to broadcast block to any peer")
 	}
 
 	return nil
-}
-
-// parseHeadersCount returns the number of headers encoded in a headers payload.
-func parseHeadersCount(payload []byte) (int, error) {
-	r := bytes.NewReader(payload)
-	n, err := readVarInt(r)
-	if err != nil {
-		return 0, err
-	}
-	return int(n), nil
-}
-
-// parseInvForBlock parses inv payload and returns (count, containsExpectedHash, err).
-func parseInvForBlock(payload []byte, expectedHash []byte) (int, bool, error) {
-	if len(expectedHash) != 32 {
-		return 0, false, fmt.Errorf("expected hash must be 32 bytes")
-	}
-	var expected [32]byte
-	copy(expected[:], expectedHash)
-	r := bytes.NewReader(payload)
-	count, err := readVarInt(r)
-	if err != nil {
-		return 0, false, err
-	}
-	for i := uint64(0); i < count; i++ {
-		var invType uint32
-		if err := binary.Read(r, binary.LittleEndian, &invType); err != nil {
-			return int(count), false, err
-		}
-		hash := make([]byte, 32)
-		if _, err := io.ReadFull(r, hash); err != nil {
-			return int(count), false, err
-		}
-		// Block types: MSG_BLOCK (2), MSG_FILTERED_BLOCK (3), MSG_CMPCT_BLOCK (4)
-		if invType == 2 || invType == 3 || invType == 4 {
-			if bytes.Equal(hash, expected[:]) {
-				return int(count), true, nil
-			}
-		}
-	}
-	return int(count), false, nil
 }
 
 // blockHashChain returns the block hash used for chain linkage (prevBlock).

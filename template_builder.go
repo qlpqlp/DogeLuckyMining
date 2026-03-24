@@ -77,11 +77,18 @@ func BitsToDifficulty(bits uint32) float64 {
 
 // BuildTemplateFromHeader builds a BlockTemplate from the chain tip header.
 // This allows the app to build the block template in-app using only the tip (from RPC or P2P).
-func BuildTemplateFromHeader(tip *BlockHeader, payoutAddr string) (*BlockTemplate, error) {
+// network is "mainnet" or "testnet"; used to compute correct next-block bits (e.g. testnet min-difficulty).
+// lastNonMinBits: on testnet P2P, pass the last seen non-min-difficulty nBits so we use correct bits when tip is min-diff (can be nil for RPC).
+// tipParentTimestamp: parent block's unix time (P2P); 0 if unknown (DigiShield uses tip.Bits fallback).
+func BuildTemplateFromHeader(tip *BlockHeader, payoutAddr string, network string, lastNonMinBits *uint32, tipParentTimestamp uint32) (*BlockTemplate, error) {
 	if tip == nil {
 		return nil, fmt.Errorf("tip header is nil")
 	}
 	nextHeight := tip.Height + 1
+	now := time.Now().Unix()
+
+	// Required bits for the *next* block (DigiShield on mainnet/testnet when tip ≥ 145000; testnet min-diff rules)
+	nextBits := GetNextWorkRequiredExtended(tip, now, network, lastNonMinBits, tipParentTimestamp)
 
 	// Previous block hash in display/BE order (same as RPC getblocktemplate); createEmptyBlock hexTo32Bytes reverses to internal for wire
 	prevDisplay := make([]byte, 32)
@@ -91,14 +98,20 @@ func BuildTemplateFromHeader(tip *BlockHeader, payoutAddr string) (*BlockTemplat
 
 	// Bits: 4 bytes little-endian as 8-char hex
 	bitsBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bitsBuf, tip.Bits)
+	binary.LittleEndian.PutUint32(bitsBuf, nextBits)
 	bitsHex := hex.EncodeToString(bitsBuf)
 
-	targetHex := BitsToTargetHex(tip.Bits)
-	now := time.Now().Unix()
+	targetHex := BitsToTargetHex(nextBits)
+
+	// For solo mining: SET the AuxPoW bit (0x100)
+	// The 0x100 bit tells peers: "AuxPow data follows the 80-byte header"
+	// We serialize minimal AuxPow (5 bytes: merkle count=0, chain index=0)
+	// Peers read AuxPow even for solo blocks (they just see zeros)
+	// This bit MUST be set whenever ANY AuxPow data is serialized
+	nextVersion := tip.Version | int32(0x100) // Force set VERSION_AUXPOW bit
 
 	return &BlockTemplate{
-		Version:           tip.Version,
+		Version:           nextVersion,
 		PreviousBlockHash: prevHashHex,
 		Transactions:      nil,
 		CoinbaseValue:     BlockRewardForHeight(nextHeight),
@@ -107,9 +120,20 @@ func BuildTemplateFromHeader(tip *BlockHeader, payoutAddr string) (*BlockTemplat
 		Target:            targetHex,
 		Bits:              bitsHex,
 		Height:            nextHeight,
-		Difficulty:        BitsToDifficulty(tip.Bits),
+		Difficulty:        BitsToDifficulty(nextBits),
 		Mintime:           int64(tip.Timestamp),
 		CurTime:           now,
 		NonceRange:        "",
 	}, nil
+}
+
+// FormatTemplateBitsForLog decodes template.Bits (8 hex chars = 4 LE bytes on wire) to canonical compact nBits for logs.
+// Example: wire hex "ffff0f1e" is the same nBits as Core prints as 0x1e0fffff.
+func FormatTemplateBitsForLog(bitsHex string) string {
+	b, err := hex.DecodeString(bitsHex)
+	if err != nil || len(b) != 4 {
+		return bitsHex
+	}
+	compact := binary.LittleEndian.Uint32(b)
+	return fmt.Sprintf("nBits(compact)=0x%08x wire-bytes-hex=%s", compact, bitsHex)
 }

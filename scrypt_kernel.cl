@@ -55,53 +55,94 @@ void sha256_transform(__private uint *state, __private const uchar *data) {
     state[4] += e; state[5] += f; state[6] += g; state[7] += h;
 }
 
-// PBKDF2-HMAC-SHA256 single iteration
-void pbkdf2_sha256(__private const uchar *password, uint pwlen,
-                   __private const uchar *salt, uint saltlen,
-                   __private uchar *output) {
+// SHA-256 hash of a message of exactly 'len' bytes (len <= 55 for single-block, else two blocks).
+// Used to hash HMAC keys longer than 64 bytes per RFC 2104.
+void sha256_hash80(__private const uchar *msg, __private uchar *digest) {
+    uint state[8];
+    uchar buf[64];
+    state[0] = 0x6a09e667; state[1] = 0xbb67ae85;
+    state[2] = 0x3c6ef372; state[3] = 0xa54ff53a;
+    state[4] = 0x510e527f; state[5] = 0x9b05688c;
+    state[6] = 0x1f83d9ab; state[7] = 0x5be0cd19;
+    // First block: bytes 0..63
+    for (int i = 0; i < 64; i++) buf[i] = msg[i];
+    sha256_transform(state, buf);
+    // Second block: bytes 64..79 + padding
+    for (int i = 0; i < 64; i++) buf[i] = 0;
+    for (int i = 0; i < 16; i++) buf[i] = msg[64 + i];
+    buf[16] = 0x80;
+    // Length = 80 bytes * 8 = 640 bits = 0x0280
+    buf[62] = 0x02; buf[63] = 0x80;
+    sha256_transform(state, buf);
+    // Serialize
+    for (int i = 0; i < 8; i++) {
+        digest[i*4]   = (state[i] >> 24) & 0xFF;
+        digest[i*4+1] = (state[i] >> 16) & 0xFF;
+        digest[i*4+2] = (state[i] >>  8) & 0xFF;
+        digest[i*4+3] =  state[i]        & 0xFF;
+    }
+}
+
+// PBKDF2-HMAC-SHA256: one block (32 bytes) with given block_index (1..4 for Scrypt 128-byte B). Matches Dogecoin Core scrypt.cpp.
+void pbkdf2_sha256_block(__private const uchar *password, uint pwlen,
+                         __private const uchar *salt, uint saltlen,
+                         uint block_index, __private uchar *output) {
     uchar ipad[64], opad[64];
     uchar buffer[64];
     uint istate[8], ostate[8], finalstate[8];
     
-    // Prepare padded key
-    for (int i = 0; i < 64; i++) {
-        uchar k = (i < pwlen) ? password[i] : 0;
-        ipad[i] = k ^ 0x36;
-        opad[i] = k ^ 0x5c;
+    // RFC 2104: if key length > block size (64), hash the key first
+    if (pwlen > 64) {
+        uchar hashed_key[32];
+        sha256_hash80(password, hashed_key);
+        for (int i = 0; i < 32; i++) {
+            ipad[i] = hashed_key[i] ^ 0x36;
+            opad[i] = hashed_key[i] ^ 0x5c;
+        }
+        for (int i = 32; i < 64; i++) {
+            ipad[i] = 0x36;
+            opad[i] = 0x5c;
+        }
+    } else {
+        for (int i = 0; i < 64; i++) {
+            uchar k = (i < pwlen) ? password[i] : 0;
+            ipad[i] = k ^ 0x36;
+            opad[i] = k ^ 0x5c;
+        }
     }
     
-    // Inner hash state
     istate[0] = 0x6a09e667; istate[1] = 0xbb67ae85;
     istate[2] = 0x3c6ef372; istate[3] = 0xa54ff53a;
     istate[4] = 0x510e527f; istate[5] = 0x9b05688c;
     istate[6] = 0x1f83d9ab; istate[7] = 0x5be0cd19;
     sha256_transform(istate, ipad);
     
-    // Outer hash state
     ostate[0] = 0x6a09e667; ostate[1] = 0xbb67ae85;
     ostate[2] = 0x3c6ef372; ostate[3] = 0xa54ff53a;
     ostate[4] = 0x510e527f; ostate[5] = 0x9b05688c;
     ostate[6] = 0x1f83d9ab; ostate[7] = 0x5be0cd19;
     sha256_transform(ostate, opad);
     
-    // HMAC(salt || 0x00000001)
+    // Inner hash: H(K_ipad || salt || INT(block_index)) — salt 80 bytes, INT = 4 bytes BE (RFC 8018 / Dogecoin Core)
     for (int i = 0; i < 8; i++) finalstate[i] = istate[i];
     
-    // Process salt + counter
-    for (int i = 0; i < 64; i++) buffer[i] = 0;
-    for (int i = 0; i < saltlen && i < 60; i++) buffer[i] = salt[i];
-    buffer[saltlen] = 0; buffer[saltlen+1] = 0;
-    buffer[saltlen+2] = 0; buffer[saltlen+3] = 1; // counter = 1
+    for (int i = 0; i < 64; i++) buffer[i] = (i < saltlen) ? salt[i] : 0;
     sha256_transform(finalstate, buffer);
     
-    // Pad and finalize
     for (int i = 0; i < 64; i++) buffer[i] = 0;
-    buffer[0] = 0x80; // padding
-    buffer[60] = 0; buffer[61] = 0; buffer[62] = 2; buffer[63] = 0; // length = 512 bits
+    for (int i = 0; i < 16 && (64+i) < saltlen; i++) buffer[i] = salt[64 + i];
+    buffer[16] = (block_index >> 24) & 0xFF;
+    buffer[17] = (block_index >> 16) & 0xFF;
+    buffer[18] = (block_index >> 8) & 0xFF;
+    buffer[19] = block_index & 0xFF;
+    buffer[20] = 0x80;
+    buffer[56] = 0; buffer[57] = 0; buffer[58] = 0; buffer[59] = 0;
+    // Length = (64 + 80 + 4) bytes * 8 bits = 1184 bits = 0x04A0
+    buffer[60] = 0; buffer[61] = 0; buffer[62] = 0x04; buffer[63] = 0xA0;
     sha256_transform(finalstate, buffer);
     
-    // Outer HMAC
-    for (int i = 0; i < 8; i++) finalstate[i] = ostate[i];
+    // Outer HMAC: serialize inner hash (in finalstate) into buffer BEFORE overwriting finalstate with ostate.
+    // Previously the assignment finalstate=ostate came first, corrupting the inner hash bytes written to buffer.
     for (int i = 0; i < 64; i++) buffer[i] = 0;
     // Write inner hash result
     for (int i = 0; i < 8; i++) {
@@ -110,6 +151,7 @@ void pbkdf2_sha256(__private const uchar *password, uint pwlen,
         buffer[i*4+2] = (finalstate[i] >> 8) & 0xFF;
         buffer[i*4+3] = finalstate[i] & 0xFF;
     }
+    for (int i = 0; i < 8; i++) finalstate[i] = ostate[i];
     buffer[32] = 0x80;
     buffer[62] = 3; buffer[63] = 0; // length = 768 bits
     sha256_transform(finalstate, buffer);
@@ -210,18 +252,90 @@ void romix_mix(__private uint *B, __global const uint *V) {
     }
 }
 
+// PBKDF2 with 128-byte salt, block 1 only (for final Scrypt step). Message = salt(128) || INT(1) = 132 bytes.
+void pbkdf2_sha256_salt128_block1(__private const uchar *password, uint pwlen,
+                                  __private const uchar *salt128,
+                                  __private uchar *output) {
+    uchar ipad[64], opad[64];
+    uchar buffer[64];
+    uint istate[8], ostate[8], finalstate[8];
+    
+    // RFC 2104: if key length > block size (64), hash the key first
+    if (pwlen > 64) {
+        uchar hashed_key[32];
+        sha256_hash80(password, hashed_key);
+        for (int i = 0; i < 32; i++) {
+            ipad[i] = hashed_key[i] ^ 0x36;
+            opad[i] = hashed_key[i] ^ 0x5c;
+        }
+        for (int i = 32; i < 64; i++) {
+            ipad[i] = 0x36;
+            opad[i] = 0x5c;
+        }
+    } else {
+        for (int i = 0; i < 64; i++) {
+            uchar k = (i < pwlen) ? password[i] : 0;
+            ipad[i] = k ^ 0x36;
+            opad[i] = k ^ 0x5c;
+        }
+    }
+    istate[0] = 0x6a09e667; istate[1] = 0xbb67ae85;
+    istate[2] = 0x3c6ef372; istate[3] = 0xa54ff53a;
+    istate[4] = 0x510e527f; istate[5] = 0x9b05688c;
+    istate[6] = 0x1f83d9ab; istate[7] = 0x5be0cd19;
+    sha256_transform(istate, ipad);
+    ostate[0] = 0x6a09e667; ostate[1] = 0xbb67ae85;
+    ostate[2] = 0x3c6ef372; ostate[3] = 0xa54ff53a;
+    ostate[4] = 0x510e527f; ostate[5] = 0x9b05688c;
+    ostate[6] = 0x1f83d9ab; ostate[7] = 0x5be0cd19;
+    sha256_transform(ostate, opad);
+    
+    for (int i = 0; i < 8; i++) finalstate[i] = istate[i];
+    for (int i = 0; i < 64; i++) buffer[i] = salt128[i];
+    sha256_transform(finalstate, buffer);
+    for (int i = 0; i < 64; i++) buffer[i] = salt128[64 + i];
+    sha256_transform(finalstate, buffer);
+    for (int i = 0; i < 64; i++) buffer[i] = 0;
+    buffer[0] = 0; buffer[1] = 0; buffer[2] = 0; buffer[3] = 1;
+    buffer[4] = 0x80;
+    // Length = (64 ipad + 128 salt + 4 INT) * 8 = 1568 bits = 0x0620.
+    // Must be at bytes 56-63 (big-endian 64-bit). Previous code put 0x0420 at bytes 58-59, yielding garbage.
+    buffer[56] = 0; buffer[57] = 0; buffer[58] = 0; buffer[59] = 0;
+    buffer[60] = 0; buffer[61] = 0; buffer[62] = 0x06; buffer[63] = 0x20;
+    sha256_transform(finalstate, buffer);
+    // finalstate now holds inner digest; serialize to buffer for outer hash
+    for (int i = 0; i < 8; i++) {
+        buffer[i*4]   = (finalstate[i] >> 24) & 0xFF;
+        buffer[i*4+1] = (finalstate[i] >> 16) & 0xFF;
+        buffer[i*4+2] = (finalstate[i] >> 8) & 0xFF;
+        buffer[i*4+3] = finalstate[i] & 0xFF;
+    }
+    for (int i = 0; i < 8; i++) finalstate[i] = ostate[i];
+    buffer[32] = 0x80;
+    for (int i = 33; i < 56; i++) buffer[i] = 0;
+    buffer[56] = 0; buffer[57] = 0; buffer[58] = 0; buffer[59] = 0;
+    buffer[60] = 0; buffer[61] = 0; buffer[62] = 0x03; buffer[63] = 0x00; // 768 bits
+    sha256_transform(finalstate, buffer);
+    for (int i = 0; i < 8; i++) {
+        output[i*4]   = (finalstate[i] >> 24) & 0xFF;
+        output[i*4+1] = (finalstate[i] >> 16) & 0xFF;
+        output[i*4+2] = (finalstate[i] >> 8) & 0xFF;
+        output[i*4+3] = finalstate[i] & 0xFF;
+    }
+}
+
 // Complete scrypt hash
 void scrypt_1024_1_1(__private const uchar *input, __private uchar *output, __global uint *V) {
     uchar B[128];
     uint X[32];
     
-    // PBKDF2(password=input, salt=input, c=1, dkLen=128)
-    pbkdf2_sha256(input, 80, input, 80, B);
-    pbkdf2_sha256(input, 80, input, 80, B + 32);
-    pbkdf2_sha256(input, 80, input, 80, B + 64);
-    pbkdf2_sha256(input, 80, input, 80, B + 96);
+    // PBKDF2(password=input, salt=input, c=1, dkLen=128) — blocks 1..4 (Dogecoin Core)
+    pbkdf2_sha256_block(input, 80, input, 80, 1, B);
+    pbkdf2_sha256_block(input, 80, input, 80, 2, B + 32);
+    pbkdf2_sha256_block(input, 80, input, 80, 3, B + 64);
+    pbkdf2_sha256_block(input, 80, input, 80, 4, B + 96);
     
-    // Convert to uint array
+    // B from PBKDF2 is big-endian (HMAC-SHA256); convert to X as little-endian 32-bit words (matches Dogecoin Core le32dec(&B[4*k]))
     for (int i = 0; i < 32; i++) {
         X[i] = ((uint)B[i*4]) | ((uint)B[i*4+1] << 8) |
                ((uint)B[i*4+2] << 16) | ((uint)B[i*4+3] << 24);
@@ -230,7 +344,7 @@ void scrypt_1024_1_1(__private const uchar *input, __private uchar *output, __gl
     // ROMix
     romix(X, V);
     
-    // Convert back to bytes
+    // Convert back to bytes (little-endian per word, matches Dogecoin Core le32enc)
     for (int i = 0; i < 32; i++) {
         B[i*4]   = X[i] & 0xFF;
         B[i*4+1] = (X[i] >> 8) & 0xFF;
@@ -238,8 +352,8 @@ void scrypt_1024_1_1(__private const uchar *input, __private uchar *output, __gl
         B[i*4+3] = (X[i] >> 24) & 0xFF;
     }
     
-    // Final PBKDF2
-    pbkdf2_sha256(input, 80, B, 128, output);
+    // Final PBKDF2(password=input, salt=B, c=1, dkLen=32)
+    pbkdf2_sha256_salt128_block1(input, 80, B, output);
 }
 
 // Main mining kernel
@@ -265,11 +379,13 @@ __kernel void mine_scrypt(
     // Compute scrypt hash
     scrypt_1024_1_1(header, hash, V + gid * 1024 * 32);
     
-    // Compare hash to target (little-endian)
+    // Compare hash to target: hash is big-endian (PBKDF2), target is little-endian (from host).
+    // As 256-bit LE: hash_le[i] = hash[31-i]. Compare MSB first (i=31) down to LSB (i=0).
     bool found = true;
     for (int i = 31; i >= 0; i--) {
-        if (hash[i] < target[i]) break;
-        if (hash[i] > target[i]) {
+        uchar h = hash[31 - i];
+        if (h < target[i]) break;
+        if (h > target[i]) {
             found = false;
             break;
         }
@@ -302,10 +418,10 @@ __kernel void scrypt_fill(
     header[77] = (nonce >> 8) & 0xFF;
     header[78] = (nonce >> 16) & 0xFF;
     header[79] = (nonce >> 24) & 0xFF;
-    pbkdf2_sha256(header, 80, header, 80, B);
-    pbkdf2_sha256(header, 80, header, 80, B + 32);
-    pbkdf2_sha256(header, 80, header, 80, B + 64);
-    pbkdf2_sha256(header, 80, header, 80, B + 96);
+    pbkdf2_sha256_block(header, 80, header, 80, 1, B);
+    pbkdf2_sha256_block(header, 80, header, 80, 2, B + 32);
+    pbkdf2_sha256_block(header, 80, header, 80, 3, B + 64);
+    pbkdf2_sha256_block(header, 80, header, 80, 4, B + 96);
     for (int i = 0; i < 32; i++) {
         X[i] = ((uint)B[i*4]) | ((uint)B[i*4+1] << 8) | ((uint)B[i*4+2] << 16) | ((uint)B[i*4+3] << 24);
     }
@@ -340,11 +456,13 @@ __kernel void scrypt_mix(
         B[i*4+2] = (X[i] >> 16) & 0xFF;
         B[i*4+3] = (X[i] >> 24) & 0xFF;
     }
-    pbkdf2_sha256(header, 80, B, 128, hash);
+    pbkdf2_sha256_salt128_block1(header, 80, B, hash);
+    // hash is BE, target is LE; compare as 256-bit LE: hash_le[i] = hash[31-i]
     bool found = true;
     for (int i = 31; i >= 0; i--) {
-        if (hash[i] < target[i]) break;
-        if (hash[i] > target[i]) { found = false; break; }
+        uchar h = hash[31 - i];
+        if (h < target[i]) break;
+        if (h > target[i]) { found = false; break; }
     }
     if (found) {
         results[0] = 1;

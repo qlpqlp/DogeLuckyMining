@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"math/big"
 	mathrand "math/rand"
 	"runtime"
@@ -27,6 +28,8 @@ type ScryptMiner struct {
 	NonceSearchMode string // "forward", "backward", "sequential" (default)
 	NonceStartMode  string // "random", "calculated" (from block metadata)
 	UseStride       bool   // Use stride-based iteration for multi-threading
+	// Debug logging
+	DebugLogging    bool   // Enable verbose debug output
 }
 
 type MiningResult struct {
@@ -39,24 +42,26 @@ type MiningResult struct {
 func NewScryptMiner() *ScryptMiner {
 	// Dogecoin uses Scrypt with N=1024, r=1, p=1
 	return &ScryptMiner{
-		N:         1024,
-		R:         1,
-		P:         1,
-		MaxHashes: 100000, // Default max hashes per block
-		ThreadCount: 1,    // Default single thread
+		N:            1024,
+		R:            1,
+		P:            1,
+		MaxHashes:    100000, // Default max hashes per block
+		ThreadCount:  1,      // Default single thread
+		DebugLogging: false,  // Default: no debug logging
 	}
 }
 
 func NewScryptMinerWithConfig(maxHashes uint64, threadCount int) *ScryptMiner {
 	return &ScryptMiner{
-		N:          1024,
-		R:          1,
-		P:          1,
-		MaxHashes:  maxHashes,
-		ThreadCount: threadCount,
+		N:               1024,
+		R:               1,
+		P:               1,
+		MaxHashes:       maxHashes,
+		ThreadCount:     threadCount,
 		NonceSearchMode: "sequential", // Default: sequential from 0
 		NonceStartMode:  "calculated", // Default: calculate from block metadata
 		UseStride:       false,        // Default: no stride (range-based)
+		DebugLogging:    false,        // Default: no debug logging
 	}
 }
 
@@ -70,10 +75,17 @@ func (m *ScryptMiner) SetNonceStrategy(searchMode, startMode string, useStride b
 // MineBlock attempts to mine a block using predictive/random nonce selection
 // Returns: nonce, hash, found status, and number of hashes attempted
 func (m *ScryptMiner) MineBlock(block *Block, targetHex string) (uint32, []byte, bool, uint64) {
+	if m.DebugLogging {
+		log.Printf("🔨 MINING START: Block height %d, PrevBlock hash (display): %s", block.Version, hex.EncodeToString(block.PrevBlock[:4]))
+	}
+
 	// Convert target from hex string to big.Int
 	targetBytes, err := hex.DecodeString(targetHex)
 	if err != nil {
 		// If target is not hex, return false
+		if m.DebugLogging {
+			log.Printf("❌ Invalid target hex: %v", err)
+		}
 		return 0, nil, false, 0
 	}
 
@@ -81,6 +93,11 @@ func (m *ScryptMiner) MineBlock(block *Block, targetHex string) (uint32, []byte,
 	targetBig := new(big.Int).SetBytes(targetBytes)
 	if targetBig.Cmp(big.NewInt(0)) == 0 {
 		targetBig = big.NewInt(1)
+	}
+
+	if m.DebugLogging {
+		log.Printf("📊 TARGET: %s (big-endian hex from RPC/P2P)", hex.EncodeToString(targetBytes))
+		log.Printf("   → Max nonces to test: %d", m.effectiveMaxHashes())
 	}
 
 	// Use parallel mining if thread count > 1, otherwise use single-threaded strategy
@@ -93,153 +110,76 @@ func (m *ScryptMiner) MineBlock(block *Block, targetHex string) (uint32, []byte,
 }
 
 func (m *ScryptMiner) effectiveMaxHashes() uint64 {
-	limit := m.MaxHashes
-	if m.MaxHashesThisRound > 0 && m.MaxHashesThisRound < limit {
-		limit = m.MaxHashesThisRound
+	// When MaxHashesThisRound is set (e.g. testnet 2M/round), use it so we try more nonces per template.
+	if m.MaxHashesThisRound > 0 {
+		return m.MaxHashesThisRound
 	}
-	return limit
+	return m.MaxHashes
 }
 
-// mineWithStrategy uses multiple strategies to find a valid nonce
-// OPTIMIZED: Pre-computes target bytes and reuses buffers
+// mineWithStrategy searches for a valid nonce using a random start + sequential sweep.
+// This ensures uniform coverage of the nonce space across successive calls with different block templates.
 func (m *ScryptMiner) mineWithStrategy(block *Block, targetBig *big.Int) (uint32, []byte, bool, uint64) {
 	hashCount := uint64(0)
 	maxHashes := m.effectiveMaxHashes()
-	
+
 	// Pre-compute target in LE (Dogecoin Core uses uint256 LE for PoW comparison)
 	targetBytes := targetBig.Bytes()
 	targetBytesLE := make([]byte, 32)
 	copy(targetBytesLE[32-len(targetBytes):], targetBytes)
 	reverseBytesInPlace(targetBytesLE)
-	
+
+	if m.DebugLogging {
+		log.Printf("🔄 CPU SINGLE-THREADED MINING:")
+		log.Printf("   Target (BE from RPC):   %s", hex.EncodeToString(targetBytes))
+		log.Printf("   Target (LE for comparison): %s", hex.EncodeToString(targetBytesLE))
+		log.Printf("   Scrypt params: N=%d, r=%d, p=%d (Dogecoin standard)", m.N, m.R, m.P)
+	}
+
 	// Pre-compute header base (reuse for all nonces)
 	headerBase := m.precomputeHeaderBase(block)
 	headerBuf := make([]byte, len(headerBase)+4)
 	copy(headerBuf, headerBase)
-	
-	// Initialize math random with time seed for additional randomness
-	rng := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-	
-	// Strategy 1: Random nonce selection (most likely to find blocks first)
-	// Try random nonces across the entire range
-	randomNonces := make([]uint32, 1000)
-	for i := range randomNonces {
-		randomNonces[i] = rng.Uint32()
+
+	if m.DebugLogging {
+		log.Printf("   Header base (76 bytes): %s", hex.EncodeToString(headerBase[:16])+"...")
 	}
-	
-	// Try random nonces first (lucky guesses)
-	for _, nonce := range randomNonces {
-		if hashCount >= maxHashes {
-			break
-		}
-		
-		// Update nonce in pre-allocated buffer
+
+	// Random start so each round covers a different nonce region (critical for finding blocks)
+	startNonce := mathrand.New(mathrand.NewSource(time.Now().UnixNano())).Uint32()
+
+	if m.DebugLogging {
+		log.Printf("   Starting nonce (random): 0x%08x", startNonce)
+		log.Printf("   Search pattern: sequential (0x00000001, 0x00000002, ... 0xFFFFFFFF)")
+	}
+
+	for i := uint64(0); i < maxHashes; i++ {
+		nonce := uint32((uint64(startNonce) + i) & 0xFFFFFFFF)
 		binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-		hash := m.scryptHash(headerBuf)
+		hashLE := m.scryptHash(headerBuf) // scryptHash returns LE format directly - no reversal needed
 		hashCount++
-		
-		if hashMeetsTargetLE(hash, targetBytesLE) {
-			return nonce, hash, true, hashCount
+
+		// Educational debug: show sample hashes and comparisons
+		if m.DebugLogging && (i == 0 || i == 99 || i%1000 == 0 || hashCount%10000 == 0) {
+			meets := hashMeetsTargetLE(hashLE, targetBytesLE)
+			log.Printf("   [%d] Nonce 0x%08x: hash=%s... meets_target=%v", hashCount, nonce, hex.EncodeToString(hashLE)[:16], meets)
 		}
-	}
-	
-	// Strategy 2: Pattern-based nonce selection
-	// Try nonces at specific intervals that might be "lucky"
-	patterns := []uint32{
-		0x00000000, 0xFFFFFFFF, 0x12345678, 0xABCDEF00,
-		0x11111111, 0x22222222, 0x33333333, 0x44444444,
-		0x55555555, 0x66666666, 0x77777777, 0x88888888,
-		0x99999999, 0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC,
-		0xDDDDDDDD, 0xEEEEEEEE, 0xFEDCBA98, 0x76543210,
-	}
-	
-	for _, nonce := range patterns {
-		if hashCount >= maxHashes {
-			break
-		}
-		
-		// Update nonce in pre-allocated buffer
-		binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-		hash := m.scryptHash(headerBuf)
-		hashCount++
-		
-		if hashMeetsTargetLE(hash, targetBytesLE) {
-			return nonce, hash, true, hashCount
-		}
-	}
-	
-	// Strategy 3: Sequential with random starting point
-	startNonce := rng.Uint32()
-	
-	// Try sequential nonces from random start
-	for i := uint32(0); i < 50000 && hashCount < maxHashes; i++ {
-		nonce := (startNonce + i) % 0xFFFFFFFF
-		
-		// Update nonce in pre-allocated buffer
-		binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-		hash := m.scryptHash(headerBuf)
-		hashCount++
-		
-		if hashMeetsTargetLE(hash, targetBytesLE) {
-			return nonce, hash, true, hashCount
-		}
-	}
-	
-	// Strategy 4: Bit-flipping strategy (try nonces with specific bit patterns)
-	// Try nonces with leading zeros/ones which might produce better hashes
-	bitPatterns := []struct {
-		mask  uint32
-		value uint32
-	}{
-		{0xFF000000, 0x00000000}, // Leading zeros
-		{0xFF000000, 0xFF000000}, // Leading ones
-		{0x00FF0000, 0x0000FF00}, // Middle patterns
-		{0x0000FFFF, 0x0000FFFF}, // Trailing patterns
-	}
-	
-	for _, pattern := range bitPatterns {
-		if hashCount >= maxHashes {
-			break
-		}
-		
-		// Generate nonces matching the pattern
-		for j := uint32(0); j < 1000 && hashCount < maxHashes; j++ {
-			nonce := (pattern.value & pattern.mask) | (j &^ pattern.mask)
-			
-			// Update nonce in pre-allocated buffer
-			binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-			hash := m.scryptHash(headerBuf)
-			hashCount++
-			
-			if hashMeetsTargetLE(hash, targetBytesLE) {
-				return nonce, hash, true, hashCount
+
+		if hashMeetsTargetLE(hashLE, targetBytesLE) {
+			if m.DebugLogging {
+				log.Printf("✅ BLOCK FOUND! Nonce 0x%08x after %d hashes", nonce, hashCount)
 			}
+			// Return hash in display order (reversed from LE) for logging
+			hashDisplay := make([]byte, 32)
+			copy(hashDisplay, hashLE)
+			reverseBytesInPlace(hashDisplay)
+			return nonce, hashDisplay, true, hashCount
 		}
 	}
-	
-	// Strategy 5: Prime number intervals (sometimes patterns emerge)
-	primes := []uint32{2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97}
-	baseNonce := rng.Uint32() & 0xFFFF // Use lower 16 bits for base
-	
-	for _, prime := range primes {
-		if hashCount >= maxHashes {
-			break
-		}
-		
-		for mult := uint32(0); mult < 1000 && hashCount < maxHashes; mult++ {
-			nonce := (baseNonce + prime*mult) % 0xFFFFFFFF
-			
-			// Update nonce in pre-allocated buffer
-			binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-			hash := m.scryptHash(headerBuf)
-			hashCount++
-			
-			if hashMeetsTargetLE(hash, targetBytesLE) {
-				return nonce, hash, true, hashCount
-			}
-		}
+
+	if m.DebugLogging {
+		log.Printf("⚠️ No block found in %d hashes (nonces 0x%08x to 0x%08x)", maxHashes, startNonce, uint32((uint64(startNonce)+maxHashes-1)&0xFFFFFFFF))
 	}
-	
 	return 0, nil, false, hashCount
 }
 
@@ -268,6 +208,17 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 	var found atomic.Bool
 	var totalHashes atomic.Uint64
 
+	if m.DebugLogging {
+		log.Printf("⚙️ CPU PARALLEL MINING:")
+		log.Printf("   Threads: %d (each pins to a CPU core)", m.ThreadCount)
+		log.Printf("   Strategy: %s nonce iteration, %s start", m.NonceSearchMode, m.NonceStartMode)
+		if m.UseStride {
+			log.Printf("   Distribution: STRIDE (each thread increments by %d)", m.ThreadCount)
+		} else {
+			log.Printf("   Distribution: RANGE (divide nonce space into %d ranges)", m.ThreadCount)
+		}
+	}
+
 	// Pre-compute static header parts (everything except nonce) for performance
 	headerBase := m.precomputeHeaderBase(block)
 
@@ -277,14 +228,19 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 		hashesPerThread = 1000 // Minimum per thread
 	}
 
+	if m.DebugLogging {
+		log.Printf("   Total hashes: %d, per thread: %d", m.effectiveMaxHashes(), hashesPerThread)
+	}
+
 	var wg sync.WaitGroup
 	results := make(chan struct {
 		nonce uint32
 		hash  []byte
 	}, m.ThreadCount)
 
-	// Calculate starting nonce based on strategy
-	startNonceBase := calculateStartNonceCPU(block, m.NonceStartMode)
+	// Always use random start so each mining round covers a different nonce region.
+	// Deterministic starts meant successive rounds all searched the same narrow region.
+	startNonceBase := calculateStartNonceCPU(block, "random")
 	
 	// Determine nonce distribution strategy
 	var nonceRangePerThread uint64
@@ -297,15 +253,26 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 	}
 
 	// Start parallel mining threads with optimized deterministic nonce ranges
+	if m.DebugLogging {
+		log.Printf("DEBUG: Starting %d mining threads, %d hashes per thread, total=%d", m.ThreadCount, hashesPerThread, m.effectiveMaxHashes())
+	}
 	for t := 0; t < m.ThreadCount; t++ {
 		wg.Add(1)
 		go func(threadID int) {
-			defer wg.Done()
+			defer func() {
+				if m.DebugLogging {
+					log.Printf("DEBUG: Thread %d exiting", threadID)
+				}
+				wg.Done()
+			}()
 
 			// Pin goroutine to CPU core for better cache locality
 			runtime.LockOSThread()
 			defer runtime.UnlockOSThread()
 
+			if m.DebugLogging {
+				log.Printf("DEBUG: Thread %d started", threadID)
+			}
 			localHashCount := uint64(0)
 			maxLocalHashes := hashesPerThread
 
@@ -318,7 +285,12 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 			targetBytesLE := make([]byte, 32)
 			copy(targetBytesLE[32-len(targetBytes):], targetBytes)
 			reverseBytesInPlace(targetBytesLE)
-			
+
+			// Log target and initial hash sample
+			if m.DebugLogging && threadID == 0 {
+				log.Printf("DEBUG CPU Mining: Target (LE) = %s", hex.EncodeToString(targetBytesLE))
+			}
+
 			// Determine nonce iteration strategy
 			var threadStartNonce, threadEndNonce uint32
 			var stride uint32
@@ -340,7 +312,7 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 			// Process nonces based on search mode
 			currentNonce := threadStartNonce
 			batchSize := 1000
-			
+
 			if m.NonceSearchMode == "backward" {
 				// Backward search: count down from startNonce
 				for localHashCount < maxLocalHashes && currentNonce > 0 && !found.Load() {
@@ -350,23 +322,34 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 					} else {
 						batchEnd = 0
 					}
-					
+
 					for nonce := currentNonce; nonce > batchEnd && localHashCount < maxLocalHashes && !found.Load(); nonce-- {
 						binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-						hash := m.scryptHash(headerBuf)
+						hashLE := m.scryptHash(headerBuf) // scryptHash returns LE format directly - no reversal needed
 						localHashCount++
 
-						if hashMeetsTargetLE(hash, targetBytesLE) {
+						// Log sample hashes and target comparison every 1000 hashes
+						if m.DebugLogging && localHashCount%1000 == 0 && threadID == 0 {
+							log.Printf("DEBUG CPU: Nonce %d, Hash (LE) = %s, Meets target: %v",
+								nonce, hex.EncodeToString(hashLE), hashMeetsTargetLE(hashLE, targetBytesLE))
+						}
+
+						if hashMeetsTargetLE(hashLE, targetBytesLE) {
+							log.Printf("✅ CPU THREAD %d FOUND BLOCK: Nonce %d", threadID, nonce)
 							if !found.Swap(true) {
+								// Return hash in display order (reversed from LE) for logging
+								hashDisplay := make([]byte, 32)
+								copy(hashDisplay, hashLE)
+								reverseBytesInPlace(hashDisplay)
 								results <- struct {
 									nonce uint32
 									hash  []byte
-								}{nonce, hash}
+								}{nonce, hashDisplay}
 							}
 							return
 						}
 					}
-					
+
 					currentNonce = batchEnd
 					if currentNonce == 0 && localHashCount < maxLocalHashes {
 						currentNonce = 0xFFFFFFFF // Wrap around
@@ -376,22 +359,26 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 				// Forward or sequential search
 				for localHashCount < maxLocalHashes && !found.Load() {
 					var batchEnd uint32
-					
+
 					if m.UseStride {
 						// Stride-based iteration: nonce = startNonce + i*stride
 						// Process stride-based batch
 						for i := uint32(0); i < uint32(batchSize) && localHashCount < maxLocalHashes && !found.Load(); i++ {
 							nonce := (threadStartNonce + i*stride) % 0xFFFFFFFF
 							binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-							hash := m.scryptHash(headerBuf)
+							hashLE := m.scryptHash(headerBuf) // scryptHash returns LE format directly - no reversal needed
 							localHashCount++
 
-							if hashMeetsTargetLE(hash, targetBytesLE) {
+							if hashMeetsTargetLE(hashLE, targetBytesLE) {
 								if !found.Swap(true) {
+									// Return hash in display order (reversed from LE) for logging
+									hashDisplay := make([]byte, 32)
+									copy(hashDisplay, hashLE)
+									reverseBytesInPlace(hashDisplay)
 									results <- struct {
 										nonce uint32
 										hash  []byte
-									}{nonce, hash}
+									}{nonce, hashDisplay}
 								}
 								return
 							}
@@ -405,25 +392,29 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 						if batchEnd > threadEndNonce {
 							batchEnd = threadEndNonce
 						}
-						
+
 						for nonce := currentNonce; nonce < batchEnd && localHashCount < maxLocalHashes && !found.Load(); nonce++ {
 							binary.LittleEndian.PutUint32(headerBuf[len(headerBase):], nonce)
-							hash := m.scryptHash(headerBuf)
+							hashLE := m.scryptHash(headerBuf) // scryptHash returns LE format directly - no reversal needed
 							localHashCount++
 
-							if hashMeetsTargetLE(hash, targetBytesLE) {
+							if hashMeetsTargetLE(hashLE, targetBytesLE) {
 								if !found.Swap(true) {
+									// Return hash in display order (reversed from LE) for logging
+									hashDisplay := make([]byte, 32)
+									copy(hashDisplay, hashLE)
+									reverseBytesInPlace(hashDisplay)
 									results <- struct {
 										nonce uint32
 										hash  []byte
-									}{nonce, hash}
+									}{nonce, hashDisplay}
 								}
 								return
 							}
 						}
-						
+
 						currentNonce = batchEnd
-						
+
 						// Wrap around if exhausted range
 						if currentNonce >= threadEndNonce && localHashCount < maxLocalHashes {
 							currentNonce = threadStartNonce
@@ -436,36 +427,40 @@ func (m *ScryptMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []
 		}(t)
 	}
 
-	// Wait for first result or all threads to complete
-	done := make(chan bool, 1)
+	// Wait for all threads to complete (no timeout - let them finish naturally)
 	go func() {
 		wg.Wait()
 		close(results)
-		done <- true
 	}()
 
-	// Try to get a result first
-	select {
-	case result, ok := <-results:
-		if ok && result.nonce != 0 && len(result.hash) > 0 {
+	// Try to get a result from any thread
+	if m.DebugLogging {
+		log.Printf("DEBUG: Entering loop to read from results channel")
+	}
+	for result := range results {
+		if result.nonce != 0 && len(result.hash) > 0 {
 			foundNonce = result.nonce
 			foundHash = result.hash
-			found.Store(true)
-			wg.Wait()
 			// Double-check the hash meets the target (fast comparison)
 			targetBytes := targetBig.Bytes()
 			targetBytesLE := make([]byte, 32)
 			copy(targetBytesLE[32-len(targetBytes):], targetBytes)
 			reverseBytesInPlace(targetBytesLE)
 			if hashMeetsTargetLE(foundHash, targetBytesLE) {
+				if m.DebugLogging {
+					log.Printf("DEBUG: Found valid hash, draining remaining results...")
+				}
+				// Drain remaining results before returning
+				go func() {
+					for range results {
+					}
+				}()
 				return foundNonce, foundHash, true, totalHashes.Load()
 			}
 		}
-		<-done
-		return 0, nil, false, totalHashes.Load()
-	case <-done:
-		return 0, nil, false, totalHashes.Load()
 	}
+
+	return 0, nil, false, totalHashes.Load()
 }
 
 
@@ -481,6 +476,10 @@ func (m *ScryptMiner) precomputeHeaderBase(block *Block) []byte {
 // Same as cpuminer-multi (tpruvot) and cgminer (ozbenh): 80-byte block header as password and salt.
 // PBKDF2-HMAC uses the 80-byte key; HMAC-SHA256 hashes keys >64 bytes, so effective key is SHA256(header).
 // Header must be in wire order (version LE, prevBlock, merkle, time LE, bits LE, nonce LE).
+//
+// CRITICAL: scrypt.Key() returns 32 bytes in little-endian uint256 format directly.
+// This is the NATIVE format that Dogecoin Core uses internally for PoW comparison.
+// DO NOT reverse these bytes before comparison — they are already in the correct format.
 func (m *ScryptMiner) scryptHash(header80 []byte) []byte {
 	if len(header80) != 80 {
 		panic(fmt.Sprintf("scryptHash requires 80-byte header, got %d", len(header80)))

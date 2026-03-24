@@ -79,6 +79,7 @@ func TestScryptKnownBlockFromBlock(t *testing.T) {
 		Timestamp:  0x52fd869d,
 		Bits:       0x1b267eeb,
 		Nonce:      0x84214800,
+		AuxPow:     nil,
 	}
 
 	header80 := block.SerializeHeader()

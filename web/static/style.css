@@ -54,11 +54,34 @@ header {
 header h1 {
     font-size: 2.5em;
     margin-bottom: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px 14px;
+}
+
+header h1 .app-title-text {
     color: var(--primary-color);
     background: linear-gradient(135deg, var(--primary-color), #ffd700);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+}
+
+header h1 .version-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 10px;
+    font-size: 0.32em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    line-height: 1.3;
+    color: #1a1308;
+    background: linear-gradient(135deg, #ffd700, #f0b429);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    -webkit-text-fill-color: initial;
 }
 
 .subtitle {
@@ -814,4 +837,295 @@ input:focus-visible {
     .form-actions .btn {
         width: 100%;
     }
+}
+
+/* ════════════════════════════════════════════════
+   Educational Section
+   ════════════════════════════════════════════════ */
+.edu-section {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    margin-bottom: 30px;
+    overflow: hidden;
+}
+
+.edu-toggle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 24px;
+    cursor: pointer;
+    user-select: none;
+    border-bottom: 2px solid transparent;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.edu-toggle:hover,
+.edu-toggle:focus {
+    background: rgba(194, 166, 51, 0.07);
+    border-bottom-color: var(--primary-color);
+    outline: none;
+}
+
+/* The paw icon in the toggle header */
+.edu-toggle-icon {
+    font-size: 1.6em;
+    color: var(--primary-color);
+}
+
+.edu-chevron {
+    margin-left: auto;
+    color: var(--primary-color);
+    display: flex;
+    align-items: center;
+}
+
+.edu-chevron .material-icons {
+    font-size: 1.6em;
+}
+
+.edu-badge {
+    background: linear-gradient(135deg, var(--primary-color), #ffd700);
+    color: #000;
+    font-size: 0.6em;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    vertical-align: middle;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.edu-body {
+    padding: 8px 0 24px;
+}
+
+/* Each card inside the edu section */
+.edu-card {
+    display: flex;
+    gap: 18px;
+    padding: 20px 24px;
+    border-top: 1px solid var(--border-color);
+}
+
+.edu-card:first-child {
+    border-top: none;
+}
+
+/* Card icon column: holds a Material Icon span */
+.edu-card-icon {
+    flex-shrink: 0;
+    width: 2.4em;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 2px;
+}
+
+.edu-card-icon .material-icons {
+    font-size: 2em;
+    color: var(--primary-color);
+}
+
+.edu-card-content h3 {
+    color: var(--primary-color);
+    margin-bottom: 10px;
+    font-size: 1.05em;
+}
+
+.edu-card-content p {
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    line-height: 1.65;
+}
+
+.edu-card-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* Highlighted fun note with a leading icon */
+.edu-fun {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: rgba(194, 166, 51, 0.08);
+    border-left: 3px solid var(--primary-color);
+    padding: 8px 14px;
+    border-radius: 0 6px 6px 0;
+    color: var(--text-primary) !important;
+    font-style: italic;
+    margin-top: 10px !important;
+}
+
+.edu-fun-icon {
+    flex-shrink: 0;
+    font-size: 1.2em !important;
+    color: var(--primary-color);
+    margin-top: 1px;
+}
+
+.edu-formula {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-family: monospace;
+    font-size: 0.95em;
+    color: #ffd700;
+    margin: 10px 0;
+    text-align: center;
+}
+
+/* Mini stat row inside an edu card */
+.edu-stats-row {
+    display: flex;
+    gap: 16px;
+    margin: 14px 0 4px;
+    flex-wrap: wrap;
+}
+
+.edu-stat {
+    flex: 1;
+    min-width: 100px;
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+}
+
+.edu-stat-num {
+    display: block;
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.edu-stat-label {
+    display: block;
+    font-size: 0.78em;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+/* Solo vs Pool comparison */
+.edu-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 12px 0;
+}
+
+@media (max-width: 620px) {
+    .edu-compare {
+        grid-template-columns: 1fr;
+    }
+    .edu-card {
+        flex-direction: column;
+    }
+    .edu-card-icon {
+        width: auto;
+        justify-content: flex-start;
+    }
+}
+
+.edu-compare-col {
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.edu-solo {
+    background: rgba(76, 175, 80, 0.08);
+    border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.edu-pool {
+    background: rgba(244, 67, 54, 0.06);
+    border: 1px solid rgba(244, 67, 54, 0.25);
+}
+
+.edu-compare-col h4 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+    font-size: 0.95em;
+}
+
+.edu-compare-col h4 .material-icons {
+    font-size: 1.1em;
+}
+
+.edu-solo h4 { color: var(--success-color); }
+.edu-pool h4 { color: #ef9a9a; }
+
+.edu-compare-col ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.edu-compare-col ul li {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 0.88em;
+    padding: 3px 0;
+    line-height: 1.5;
+}
+
+/* Inline icon colours for list items */
+.edu-li-ok  { color: var(--success-color) !important; font-size: 1em !important; flex-shrink: 0; margin-top: 1px; }
+.edu-li-warn { color: #ffb300 !important; font-size: 1em !important; flex-shrink: 0; margin-top: 1px; }
+.edu-li-err  { color: var(--error-color) !important; font-size: 1em !important; flex-shrink: 0; margin-top: 1px; }
+
+/* Icon for plain bullet lists (edu-list) */
+.edu-li-icon {
+    color: var(--primary-color) !important;
+    font-size: 1em !important;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+/* Bulleted list inside edu cards */
+.edu-list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0;
+}
+
+.edu-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--text-secondary);
+    padding: 4px 0;
+    line-height: 1.5;
+}
+
+/* Numbered steps list */
+.edu-steps {
+    padding-left: 22px;
+    margin: 8px 0;
+}
+
+.edu-steps li {
+    color: var(--text-secondary);
+    padding: 5px 0;
+    line-height: 1.6;
+}
+
+.edu-steps li strong {
+    color: var(--text-primary);
+}
+
+.edu-steps code {
+    background: rgba(0,0,0,0.35);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.9em;
+    color: #ffd700;
 }

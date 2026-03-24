@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ðoge Lucky Mining - Dogecoin Miner</title>
+    <title>Ðoge Lucky Mining — Beta v420.69</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
     <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
     <link rel="stylesheet" href="/static/style.css">
@@ -19,7 +19,10 @@
     </noscript>
     <div class="container">
         <header>
-            <h1><span class="material-icons" aria-hidden="true">pets</span> Ðoge Lucky Mining</h1>
+            <h1>
+                <span class="app-title-text"><span class="material-icons" aria-hidden="true">pets</span> Ðoge Lucky Mining</span>
+                <span class="version-badge" title="Preview build">Beta v420.69</span>
+            </h1>
             <p class="subtitle">Autonomous Dogecoin Lucky Mining for Empty Blocks</p>
         </header>
 
@@ -27,6 +30,7 @@
             <span class="status-indicator" id="statusIndicator" aria-hidden="true"></span>
             <span id="statusText">Stopped</span>
             <span class="network-badge" id="networkBadge">Mainnet</span>
+            <span class="network-badge" id="deviceBadge" style="background: #4CAF50;">CPU</span>
         </div>
 
         <div class="stats-grid">
@@ -66,6 +70,10 @@
                 <div class="info-item">
                     <span class="info-label">Block Time:</span>
                     <span class="info-value" id="blockAttemptSeconds" title="Time spent mining the current/last block attempt">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Hashes This Block:</span>
+                    <span class="info-value" id="blockHashesAttempted" title="Number of hashes tested on the current block (resets per block)">0</span>
                 </div>
             </div>
             <div class="target-bar" id="targetBar" title="">
@@ -108,7 +116,7 @@
                                 <option value="rpc">Use RPC (Dogecoin Core node)</option>
                                 <option value="p2p" selected>P2P only (no node required)</option>
                             </select>
-                            <small><strong>RPC:</strong> Connect to your local or remote Dogecoin Core (needs node). <strong>P2P:</strong> Connect directly to the network — no Dogecoin Core needed.</small>
+                            <small><strong>RPC:</strong> Connect to your local or remote Dogecoin Core (needs node). <strong>P2P:</strong> Connect directly to the network — no Dogecoin Core needed. The miner syncs headers from peers, can use multiple connections for relay, and may switch peers if one lags behind the chain tip.</small>
                         </div>
                         <div id="rpcFieldsWrap">
                             <div id="rpcFieldsGroup" class="form-group">
@@ -137,7 +145,7 @@
                         </div>
 
                         <div id="p2pOptionsWrap" class="p2p-options" style="display: none;">
-                            <h3 style="margin-top: 0; color: #4CAF50;">📡 P2P header sync start</h3>
+                            <h3 style="margin-top: 0; color: #4CAF50;"><span class="material-icons" style="vertical-align:middle;font-size:1.2em;">cell_tower</span> P2P header sync start</h3>
                             <p class="form-hint">Start syncing headers from a checkpoint to reach the tip faster. Choose mainnet or testnet checkpoints depending on Network.</p>
                             <div id="p2pCheckpointMainnetWrap" class="form-group">
                                 <label for="p2pCheckpointMainnet">Mainnet checkpoint:</label>
@@ -155,9 +163,12 @@
                                 <select id="p2pCheckpointTestnet" name="p2pCheckpointTestnet">
                                     <option value="">From beginning (genesis)</option>
                                     <option value="0">Genesis (block 0)</option>
-                                    <option value="38150909" selected>Block 38,150,909 (Feb 17, 2026)</option>
+                                    <option value="38150909">Block 38,150,909 (Feb 17, 2026)</option>
+                                    <option value="41626399">Block 41,626,399 (Mar 17, 2026)</option>
+                                    <option value="41634434">Block 41,634,434 (Mar 17, 2026 - 15:30 UTC)</option>
+                                    <option value="42799352" selected>Block 42,799,352 (Mar 23, 2026 - 16:17 UTC)</option>
                                 </select>
-                                <small><strong>Note:</strong> Testnet has low hashrate and frequent reorganizations. If this checkpoint fails, switch to Genesis for the most reliable sync.</small>
+                                <small><strong>Note:</strong> Public testnet can produce blocks very quickly (often unlike mainnet’s ~1-minute target), with heavy reorgs and orphan races. If this checkpoint fails, switch to Genesis for the most reliable sync. Finding a valid block does not guarantee pay: only the block that becomes part of the network’s best chain pays your coinbase.</small>
                             </div>
                             <div id="p2pPeerOverrideMainnetWrap" class="form-group">
                                 <label for="p2pPeerOverrideMainnet">Mainnet peer override:</label>
@@ -172,41 +183,23 @@
                         </div>
                         
                         <hr style="margin: 20px 0; border: none; border-top: 1px solid #333;">
-                        <h3 style="margin-top: 0; color: #4CAF50;"><span class="material-icons">speed</span> Mining Performance</h3>
-                        
-                        <div class="form-group">
-                            <label for="deviceType">Device Type:</label>
-                            <select id="deviceType" name="deviceType">
-                                <option value="cpu">CPU Mode</option>
-                                <option value="gpu" selected>GPU Mode (OpenCL hardware acceleration)</option>
-                            </select>
-                            <small><strong>Note:</strong> <strong>GPU Mode</strong> uses your graphics card (OpenCL) for Scrypt mining when available, with CPU fallback. <strong>CPU Mode</strong> uses multi-threaded CPU mining. Both use optimized algorithms and configurable threads.</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="threadCount">Thread Count:</label>
-                            <input type="number" id="threadCount" name="threadCount" min="1" max="64" value="64">
-                            <small><strong>Parallel Mining:</strong> Number of parallel mining threads (1-64). 
-                            <br>• <strong>CPU Mode:</strong> Thread count = 1 (single-threaded), &gt;1 (parallel multi-threaded)
-                            <br>• <strong>GPU Mode:</strong> Threads used for CPU fallback when GPU is unavailable; GPU uses its own batch size
-                            <br>• More threads = higher hash rate in CPU mode</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="miningIntensity">Mining Intensity:</label>
-                            <select id="miningIntensity" name="miningIntensity">
-                                <option value="low">Low (50K hashes/block)</option>
-                                <option value="medium">Medium (100K hashes/block)</option>
-                                <option value="high">High (500K hashes/block)</option>
-                                <option value="extreme" selected>Extreme (1M hashes/block)</option>
-                            </select>
-                            <small>How aggressively to mine. Higher = more hashes but more CPU usage</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="maxHashes">Max Hashes Per Block:</label>
-                            <input type="number" id="maxHashes" name="maxHashes" min="1000" max="1000000" value="1000000" step="1000">
-                            <small>Maximum hashes to attempt per block template (1000-1,000,000). Auto-adjusted by intensity</small>
+                        <h3 style="margin-top: 0; color: #4CAF50;"><span class="material-icons">speed</span> Auto-Optimized Mining</h3>
+
+                        <div class="form-group" style="background: #1a3a1a; padding: 15px; border-radius: 5px; border-left: 3px solid #4CAF50;">
+                            <p style="margin-top: 0; color: #90EE90;"><strong>⚙️ Intelligent Auto-Optimization Enabled</strong></p>
+                            <p style="margin: 10px 0; color: #d0d0d0;"><small>
+                            The miner automatically detects your system capabilities and optimizes mining parameters in real-time:
+                            </small></p>
+                            <ul style="margin: 10px 0; color: #d0d0d0; padding-left: 20px;">
+                                <li><strong>CPU Cores:</strong> Detected and allocated optimally for your system</li>
+                                <li><strong>Mining Intensity:</strong> Adjusted based on CPU power (low/medium/high/extreme)</li>
+                                <li><strong>Hash Rate Monitoring:</strong> Continuously measures performance and adapts</li>
+                                <li><strong>Device Selection:</strong> Intelligently chooses CPU or GPU based on availability</li>
+                                <li><strong>Thread Distribution:</strong> Uses optimal range-based nonce distribution</li>
+                            </ul>
+                            <p style="margin: 10px 0; color: #90EE90;"><small>
+                            <strong>✓ No manual tuning needed!</strong> The optimizer will find the best settings for Lucky mining on empty blocks.
+                            </small></p>
                         </div>
                         
                         <hr style="margin: 20px 0; border: none; border-top: 1px solid #333;">
@@ -234,19 +227,21 @@
                             <strong>Random:</strong> Start nonce = current time (pseudo-random)</small>
                         </div>
                         
+                        <hr style="margin: 20px 0; border: none; border-top: 1px solid #333;">
+                        <h3 style="margin-top: 0; color: #4CAF50;"><span class="material-icons">bug_report</span> Diagnostics</h3>
+
                         <div class="form-group">
                             <label class="checkbox-label">
-                                <input type="checkbox" id="useStride" name="useStride">
+                                <input type="checkbox" id="debugLogging" name="debugLogging">
                                 <span class="modern-checkbox">
                                     <span class="slider"></span>
                                 </span>
-                                <span>Use Stride-Based Iteration</span>
+                                <span>Enable Debug Logging</span>
                             </label>
-                            <small><strong>Stride Mode:</strong> Each thread tests nonces with stride = threadCount<br>
-                            Example (4 threads): Thread 0 tests 0, 4, 8, 12... Thread 1 tests 1, 5, 9, 13...<br>
-                            <strong>Range Mode (unchecked):</strong> Each thread gets a unique nonce range (default, recommended)</small>
+                            <small><strong>Debug Mode:</strong> Show detailed diagnostic output in logs (CPU threads, hash comparisons, template syncing, PoW verification)<br>
+                            <strong>Default (unchecked):</strong> Clean logs with only important messages (block found, errors, status updates)</small>
                         </div>
-                        
+
                         <div class="form-actions">
                             <button type="button" id="testConnectionBtn" class="btn btn-test">Test</button>
                             <button type="submit" id="saveConfigBtn" class="btn btn-primary"><span id="saveConfigBtnText">Save</span></button>
@@ -292,6 +287,183 @@
             </div>
         </div>
 
+        <!-- EDUCATIONAL SECTION – collapsible -->
+        <div class="edu-section">
+            <div class="edu-toggle" id="eduToggle" role="button" tabindex="0"
+                 aria-expanded="false" aria-controls="eduBody"
+                 onclick="toggleEdu()" onkeydown="if(event.key==='Enter'||event.key===' ')toggleEdu()">
+                <span class="material-icons edu-toggle-icon">pets</span>
+                <h2 style="margin:0;font-size:1.2em;">How Does Dogecoin Mining Work? <span class="edu-badge">Learn</span></h2>
+                <span class="edu-chevron" id="eduChevron"><span class="material-icons">expand_more</span></span>
+            </div>
+
+            <div class="edu-body" id="eduBody" style="display:none;">
+
+                <!-- Card 1: What is mining? -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">construction</span></div>
+                    <div class="edu-card-content">
+                        <h3>What is Mining?</h3>
+                        <p>Imagine Dogecoin as a giant <strong>shared notebook</strong> that everyone on the
+                        internet can read, but nobody can cheat in. Mining is the process that keeps that
+                        notebook honest.</p>
+                        <p>A miner's computer takes the current block header and tries to solve a
+                        <strong>math puzzle</strong> by testing billions of numbers per second until it finds
+                        the magic answer. When it does, it writes a new <em>page</em> (called a
+                        <strong>block</strong>) into the notebook forever. That page can never be erased.</p>
+                        <p class="edu-fun">
+                            <span class="material-icons edu-fun-icon">casino</span>
+                            Think of it as a lottery where every hash attempt is one ticket. The more you
+                            play, the better your odds, but anyone can get lucky on the very first try.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Card 2: Scrypt PoW -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">lock</span></div>
+                    <div class="edu-card-content">
+                        <h3>The Scrypt Puzzle: Dogecoin's Secret Sauce</h3>
+                        <p>Bitcoin uses a puzzle called <em>SHA-256</em>. Dogecoin uses a trickier one called
+                        <strong>Scrypt</strong>. Scrypt needs a lot of memory on purpose, which makes it
+                        harder for specialised chips (ASICs) to dominate.</p>
+                        <p>The puzzle works like this: feed the 80-byte block header through Scrypt with
+                        settings <strong>N=1024, r=1, p=1</strong> and get a 32-byte number back. If that
+                        number is <em>smaller</em> than a threshold called the <strong>Target</strong>, you
+                        win the block.</p>
+                        <div class="edu-formula">
+                            Scrypt(header, N=1024, r=1, p=1) &lt; Target
+                            &nbsp;&nbsp;<span class="material-icons" style="vertical-align:middle;font-size:1em;">arrow_forward</span>&nbsp;&nbsp;
+                            Block Found!
+                        </div>
+                        <p>The only variable you control is the <strong>Nonce</strong>, a 4-byte field inside
+                        the header. That gives roughly 4.3 billion combinations to try per block template.</p>
+                    </div>
+                </div>
+
+                <!-- Card 3: Difficulty -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">track_changes</span></div>
+                    <div class="edu-card-content">
+                        <h3>What is Difficulty?</h3>
+                        <p>The <strong>Target</strong> is a tiny 256-bit number. The lower it is, the harder
+                        the puzzle. On <strong>mainnet</strong>, difficulty adjusts so a new block is aimed at about every <strong>60 seconds</strong>. <strong>Testnet</strong> often behaves very differently (sometimes many blocks per second), so your odds of an included block are more about speed and fork luck than the mainnet story.</p>
+                        <p>More miners join, difficulty rises (smaller target). Miners leave, it drops.
+                        The network self-balances toward target spacing where the rules apply.</p>
+                        <div class="edu-stats-row">
+                            <div class="edu-stat">
+                                <span class="edu-stat-num">~60 s</span>
+                                <span class="edu-stat-label">Mainnet target block time</span>
+                            </div>
+                            <div class="edu-stat">
+                                <span class="edu-stat-num">10,000</span>
+                                <span class="edu-stat-label">DOGE / block</span>
+                            </div>
+                            <div class="edu-stat">
+                                <span class="edu-stat-num">&#8734;</span>
+                                <span class="edu-stat-label">Fixed Supply</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 4: Solo vs Pool -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">balance</span></div>
+                    <div class="edu-card-content">
+                        <h3>Solo Mining vs Pool Mining: Which is Better?</h3>
+                        <div class="edu-compare">
+                            <div class="edu-compare-col edu-solo">
+                                <h4><span class="material-icons">bolt</span> Solo Mining (this app)</h4>
+                                <ul>
+                                    <li><span class="material-icons edu-li-ok">check_circle</span> <strong>Keep 100% of the block subsidy when your block wins the chain</strong> (e.g. 10,000 DOGE on mainnet), zero pool fees</li>
+                                    <li><span class="material-icons edu-li-ok">check_circle</span> <strong>Private</strong>, nobody knows your hashrate</li>
+                                    <li><span class="material-icons edu-li-ok">check_circle</span> <strong>Decentralised</strong>, you strengthen the whole network</li>
+                                    <li><span class="material-icons edu-li-ok">check_circle</span> <strong>No Dogecoin Core node needed</strong> in P2P mode</li>
+                                    <li><span class="material-icons edu-li-warn">warning</span> Income is streaky, could be fast or take a while</li>
+                                    <li><span class="material-icons edu-li-warn">warning</span> High variance: dry spells between wins</li>
+                                </ul>
+                            </div>
+                            <div class="edu-compare-col edu-pool">
+                                <h4><span class="material-icons">groups</span> Pool Mining</h4>
+                                <ul>
+                                    <li><span class="material-icons edu-li-ok">check_circle</span> Steady, predictable small payouts</li>
+                                    <li><span class="material-icons edu-li-ok">check_circle</span> Good for low-hashrate miners</li>
+                                    <li><span class="material-icons edu-li-err">cancel</span> Pool takes a <strong>1–3% fee</strong> every single block</li>
+                                    <li><span class="material-icons edu-li-err">cancel</span> Pool operator controls what gets mined</li>
+                                    <li><span class="material-icons edu-li-err">cancel</span> Your IP and hashrate are visible to the pool</li>
+                                    <li><span class="material-icons edu-li-err">cancel</span> Big pools centralise Dogecoin, bad for the network</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <p class="edu-fun">
+                            <span class="material-icons edu-fun-icon">pets</span>
+                            Solo mining is the true Doge spirit. Much decentralise. Very own reward. Such wow.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Card 5: Empty blocks -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">inventory_2</span></div>
+                    <div class="edu-card-content">
+                        <h3>Why Mine Empty Blocks?</h3>
+                        <p>Most miners pack pending transactions into their blocks to collect transaction fees.
+                        This app mines <strong>empty blocks</strong> (only a coinbase transaction) on
+                        purpose because of current Dogecoin Blockchain protocol limitation, the current Dogecoin protocol allows miners to skip transactions and mine empty blocks without validating real transactions. This behavior is widely considered undesirable and should ideally be addressed at the protocol level, but it remains unfixed today:</p>
+                        <ul class="edu-list">
+                            <li><span class="material-icons edu-li-icon">speed</span> <strong>Faster template build</strong>, no mempool data required</li>
+                            <li><span class="material-icons edu-li-icon">sync</span> <strong>Header refresh and short mining rounds</strong> (especially on testnet) try to keep the template near the moving tip</li>
+                            <li><span class="material-icons edu-li-icon">verified</span> <strong>Simpler is harder to get wrong</strong>, ideal for learning and auditing</li>
+                            <li><span class="material-icons edu-li-icon">monetization_on</span> On mainnet, fees per tx are tiny compared to the block subsidy; testnet economics differ</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Card 6: Why mining exists -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">public</span></div>
+                    <div class="edu-card-content">
+                        <h3>Why Do We Need Mining at All?</h3>
+                        <p>Before Bitcoin, digital money required trusting a <em>bank</em> or <em>company</em>
+                        to keep honest books. Mining replaces that middleman with <strong>math</strong>.
+                        Anyone on Earth can verify every transaction independently.</p>
+                        <p>Mining provides three vital things:</p>
+                        <ul class="edu-list">
+                            <li><span class="material-icons edu-li-icon">security</span> <strong>Security</strong>: to rewrite history an attacker would need to redo all the mining work of the entire network. Real electricity is a powerful deterrent.</li>
+                            <li><span class="material-icons edu-li-icon">people</span> <strong>Consensus</strong>: thousands of independent computers agree on one version of the ledger without ever trusting each other.</li>
+                            <li><span class="material-icons edu-li-icon">paid</span> <strong>Fair distribution</strong>: new DOGE is handed to whoever does the work, not to whoever already has money.</li>
+                        </ul>
+                        <p class="edu-fun">
+                            <span class="material-icons edu-fun-icon">pets</span>
+                            Mining is why Dogecoin is <em>yours</em>. No CEO, no headquarters, no government
+                            controls it. Just math, electricity, and a very good boy.
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Card 7: How this app works step by step -->
+                <div class="edu-card">
+                    <div class="edu-card-icon"><span class="material-icons">build</span></div>
+                    <div class="edu-card-content">
+                        <h3>How This App Works: Step by Step</h3>
+                        <ol class="edu-steps">
+                            <li><strong>Connect</strong> via P2P (no node needed) or RPC (local Dogecoin
+                            Core). Headers are synced from peers or RPC so the template builds on the current tip (P2P mode may use several peers and pick a fresher primary if needed).</li>
+                            <li><strong>Build a block</strong>: an empty block template is created containing
+                            only a <em>coinbase transaction</em> that pays the network’s block subsidy to your payout address (mainnet uses 10,000 DOGE today; testnet has its own subsidy schedule).</li>
+                            <li><strong>Hash loop</strong>: CPU or GPU tests billions of nonces, computing
+                            <code>Scrypt(header)</code> each time and checking the result against the target.</li>
+                            <li><strong>Block found</strong>: a winning nonce makes the hash beat the target.
+                            The complete block is sent to peers over P2P (or submitted via RPC). Peers relaying your message does <em>not</em> mean you won the chain — someone else may have extended the same height first.</li>
+                            <li><strong>Did you get paid?</strong> Only if <strong>your</strong> block hash is the one at that height on the <strong>best chain</strong>. The payment monitor compares header history from P2P to your submitted hash; a mismatch means an orphan (no reward). On a fast testnet, orphans are common even when PoW and relay look fine.</li>
+                        </ol>
+                    </div>
+                </div>
+
+            </div><!-- /edu-body -->
+        </div><!-- /edu-section -->
+
         <div class="mining-log-section">
             <div class="log-header">
                 <h2><span class="material-icons">list_alt</span> Mining Log</h2>
@@ -313,5 +485,16 @@
     </div>
 
     <script src="/static/app.js"></script>
+    <script>
+    function toggleEdu() {
+        const body = document.getElementById('eduBody');
+        const chevron = document.getElementById('eduChevron');
+        const toggle = document.getElementById('eduToggle');
+        const open = body.style.display === 'none' || body.style.display === '';
+        body.style.display = open ? 'block' : 'none';
+        chevron.innerHTML = '<span class="material-icons">' + (open ? 'expand_less' : 'expand_more') + '</span>';
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    </script>
 </body>
 </html>

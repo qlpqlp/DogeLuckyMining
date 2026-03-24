@@ -49,6 +49,7 @@ function addLogEntry(message, type = 'info') {
 
 function updateStats(stats) {
     document.getElementById('hashRate').textContent = formatHashRate(stats.hashRate || 0);
+    // Display cumulative total hashes
     document.getElementById('totalHashes').textContent = formatNumber(stats.totalHashes || 0);
     document.getElementById('blocksFound').textContent = formatNumber(stats.blocksFound || 0);
     document.getElementById('uptime').textContent = formatUptime(stats.startTime);
@@ -60,9 +61,20 @@ function updateStats(stats) {
         networkBadge.textContent = network === 'testnet' ? 'Testnet' : 'Mainnet';
         networkBadge.className = 'network-badge ' + network;
     }
-    
+
+    // Update device badge (GPU/CPU)
+    const deviceBadge = document.getElementById('deviceBadge');
+    if (deviceBadge && stats.deviceType) {
+        const device = stats.deviceType.toLowerCase();
+        const isGPU = device === 'gpu';
+        deviceBadge.textContent = isGPU ? '🎮 GPU' : '💻 CPU';
+        deviceBadge.title = isGPU ? 'GPU Mining (OpenCL accelerated - faster!)' : 'CPU Mining';
+        deviceBadge.style.background = isGPU ? '#FF9800' : '#4CAF50';
+    }
+
     if (stats.currentBlock) {
         document.getElementById('blockHeight').textContent = stats.currentBlock.height || '-';
+        document.getElementById('blockHashesAttempted').textContent = formatNumber(stats.currentBlock.hashesAttempted || 0);
         // Format difficulty with commas for readability (no scientific notation)
         const difficulty = stats.currentBlock.difficulty || 0;
         const diffEl = document.getElementById('blockDifficulty');
@@ -376,21 +388,18 @@ function loadConfig() {
             const mainnetChk = document.getElementById('p2pCheckpointMainnet');
             const testnetChk = document.getElementById('p2pCheckpointTestnet');
             if (mainnetChk) mainnetChk.value = ['','0','3043797','5526282','6024440'].includes(cp) ? cp : '6024440';
-            if (testnetChk) testnetChk.value = ['','0','38150909'].includes(cp) ? cp : '38150909';
+            if (testnetChk) testnetChk.value = ['','0','38150909','41626399','41634434','42799352'].includes(cp) ? cp : '42799352';
             // Peer overrides (network-specific)
             const poMainnet = document.getElementById('p2pPeerOverrideMainnet');
             const poTestnet = document.getElementById('p2pPeerOverrideTestnet');
             if (poMainnet) poMainnet.value = (config.p2pPeerOverrideMainnet !== undefined && config.p2pPeerOverrideMainnet !== null) ? config.p2pPeerOverrideMainnet : '';
             if (poTestnet) poTestnet.value = (config.p2pPeerOverrideTestnet !== undefined && config.p2pPeerOverrideTestnet !== null) ? config.p2pPeerOverrideTestnet : '';
             // Mining performance settings (fallbacks match first-run defaults: gpu, 64, extreme, 1M)
-            document.getElementById('deviceType').value = config.deviceType || 'gpu';
-            document.getElementById('threadCount').value = config.threadCount || 64;
-            document.getElementById('miningIntensity').value = config.miningIntensity || 'extreme';
-            document.getElementById('maxHashes').value = config.maxHashes || 1000000;
             // Nonce search strategy settings
             document.getElementById('nonceSearchMode').value = config.nonceSearchMode || 'sequential';
             document.getElementById('nonceStartMode').value = config.nonceStartMode || 'calculated';
-            document.getElementById('useStride').checked = config.useStride || false;
+            // Diagnostics
+            document.getElementById('debugLogging').checked = config.debugLogging || false;
             // First run: no config file yet — show configuration modal and default to testnet
             if (config.firstRun) {
                 document.getElementById('configModal').style.display = 'block';
@@ -497,15 +506,12 @@ function saveConfig() {
         p2pPeerOverride: '', // Legacy field (deprecated)
         p2pPeerOverrideMainnet: (document.getElementById('p2pPeerOverrideMainnet') && document.getElementById('p2pPeerOverrideMainnet').value.trim()) || '',
         p2pPeerOverrideTestnet: (document.getElementById('p2pPeerOverrideTestnet') && document.getElementById('p2pPeerOverrideTestnet').value.trim()) || '',
-        // Mining performance settings
-        deviceType: document.getElementById('deviceType').value,
-        threadCount: parseInt(document.getElementById('threadCount').value) || 1,
-        miningIntensity: document.getElementById('miningIntensity').value,
-        maxHashes: parseInt(document.getElementById('maxHashes').value) || 100000,
+        // Mining performance settings (auto-optimized by system)
         // Nonce search strategy settings
         nonceSearchMode: document.getElementById('nonceSearchMode').value || 'sequential',
         nonceStartMode: document.getElementById('nonceStartMode').value || 'calculated',
-        useStride: document.getElementById('useStride').checked || false
+        // Diagnostics
+        debugLogging: document.getElementById('debugLogging').checked || false
     };
 
     const statusDiv = document.getElementById('configStatus');
@@ -579,54 +585,6 @@ function saveConfig() {
         addLogEntry('Configuration error: ' + error.message, 'error');
     });
 }
-
-// Update maxHashes when intensity changes; connection mode change
-document.addEventListener('DOMContentLoaded', function() {
-    const intensitySelect = document.getElementById('miningIntensity');
-    const maxHashesInput = document.getElementById('maxHashes');
-    
-    if (intensitySelect && maxHashesInput) {
-        intensitySelect.addEventListener('change', function() {
-            const intensity = this.value;
-            switch(intensity) {
-                case 'low':
-                    maxHashesInput.value = 50000;
-                    break;
-                case 'medium':
-                    maxHashesInput.value = 100000;
-                    break;
-                case 'high':
-                    maxHashesInput.value = 500000;
-                    break;
-                case 'extreme':
-                    maxHashesInput.value = 1000000;
-                    break;
-            }
-        });
-    }
-
-    const networkEl = document.getElementById('network');
-    if (networkEl) {
-        networkEl.addEventListener('change', function() {
-            const newNetwork = this.value || 'mainnet';
-            savePayoutToStored(currentConfigNetwork);
-            currentConfigNetwork = newNetwork;
-            updateRpcUrlPlaceholder(newNetwork);
-            updateNetworkDependentFields(newNetwork);
-            loadPayoutFromStored(newNetwork);
-        });
-    }
-    const connectionModeEl = document.getElementById('connectionMode');
-    if (connectionModeEl) {
-        connectionModeEl.addEventListener('change', function() {
-            const mode = this.value || 'rpc';
-            toggleRpcFieldsRequired(mode);
-            toggleRpcFieldsVisibility(mode);
-            toggleTestConnectionButton(mode);
-            toggleP2POptionsVisibility(mode);
-        });
-    }
-});
 
 function testConnection() {
     const connectionMode = (document.getElementById('connectionMode') && document.getElementById('connectionMode').value) || 'rpc';
@@ -775,6 +733,31 @@ document.getElementById('configForm').addEventListener('submit', function(e) {
     e.preventDefault();
     saveConfig();
 });
+
+// Network selector change handler
+var networkEl = document.getElementById('network');
+if (networkEl) {
+    networkEl.addEventListener('change', function() {
+        var newNetwork = this.value || 'mainnet';
+        savePayoutToStored(currentConfigNetwork);
+        currentConfigNetwork = newNetwork;
+        updateRpcUrlPlaceholder(newNetwork);
+        updateNetworkDependentFields(newNetwork);
+        loadPayoutFromStored(newNetwork);
+    });
+}
+
+// Connection mode change handler
+var connectionModeEl = document.getElementById('connectionMode');
+if (connectionModeEl) {
+    connectionModeEl.addEventListener('change', function() {
+        var mode = this.value || 'rpc';
+        toggleRpcFieldsRequired(mode);
+        toggleRpcFieldsVisibility(mode);
+        toggleTestConnectionButton(mode);
+        toggleP2POptionsVisibility(mode);
+    });
+}
 
 var generateAddressBtn = document.getElementById('generateAddressBtn');
 if (generateAddressBtn) generateAddressBtn.addEventListener('click', generateAddress);

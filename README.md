@@ -50,10 +50,10 @@ It is **not** a "profit" tool; block discovery is a lottery. Treat it as a proto
      - **GPU:** OpenCL (e.g. NVIDIA/AMD) on **Windows** builds; Linux/macOS builds are CPU-only for now.
 
 4. **Submission**
-   - **P2P:** Sends the block over the same P2P connection (or broadcast peers).  
+   - **P2P:** Broadcasts the block to the configured peers (primary plus optional fan-out). The miner may refresh headers from multiple peers and switch primary if another peer is far ahead on height, to reduce working on an old tip.
    - **RPC:** Submits the block via `submitblock` to your node.
 
-If the block is accepted, the block reward goes to the **payout address** you configured (mainnet or testnet).
+**Reward only on the best chain:** Relay (“peers accepted your inv/block”) is not the same as winning the chain. If another miner extends the same height first, your block becomes an **orphan** and you do not get the subsidy. This is especially common on **public testnet**, where blocks and reorgs can be very fast. The in-app payment monitor is best-effort: it compares P2P header history to your submitted block hash to infer inclusion; only when **your** block is on the longest-work chain does the subsidy go to your **payout address**.
 
 ---
 
@@ -114,7 +114,7 @@ Mining runs in the background; the web UI shows hashrate, current block, and log
 | **Thread count**   | CPU threads (used when GPU is not used or as fallback). |
 | **Mining intensity** | How many hashes per block (e.g. 50K–1M). |
 
-- **P2P:** Optional checkpoint and peer override (e.g. testnet seed) for faster or more stable sync.  
+- **P2P:** Optional checkpoint and peer override (e.g. testnet seed) for faster or more stable sync. In P2P-only mode the code may maintain multiple connections, broadcast blocks to several peers, and switch primary if another peer’s tip is materially higher — this improves relay odds but does not remove orphan risk on a competitive tip.
 - **RPC:** Set RPC URL, username, and password (e.g. from `dogecoin.conf`).
 
 ---
@@ -129,6 +129,8 @@ This is an experimental, open project. You can help by:
 - **Testing** ,try different OS, GPUs, and networks (especially testnet P2P) and share what works or breaks.
 
 The stack is **Go** (no CGO for the miner core), **OpenCL** for GPU, and a small embedded web UI. Check the source and open issues/PRs on GitHub.
+
+**Mining, consensus & P2P roadmap:** see [`docs/ROADMAP_MINING_P2P.md`](docs/ROADMAP_MINING_P2P.md) for prioritized improvements (template freshness, difficulty rules, GPU parity, `sendheaders`, locators, broadcast, etc.).
 
 ---
 

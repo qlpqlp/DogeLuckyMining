@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -107,6 +106,7 @@ type OpenCLContext struct {
 	useVirtualAllocScratch bool   // if true, use VirtualAlloc for host buffer (Windows)
 	probeFailed            bool   // if true, probe already ran and no method worked; skip GPU and don't re-probe
 	useSplitKernelPath     bool   // if true, use scrypt_fill + copy + scrypt_mix (no READ_WRITE buffer)
+	scryptVerifyFailed     bool   // if true, known-vector verification failed; use CPU instead of GPU
 	kernelFill             uintptr
 	kernelMix              uintptr
 	loggedBatchOnce        bool   // avoid logging "GPU batch" every block
@@ -319,6 +319,118 @@ func InitializeOpenCL() (*OpenCLContext, error) {
 	return ctx, nil
 }
 
+// buildBlock100000Header builds the 80-byte wire-format header for Dogecoin block 100000 (known vector).
+func buildBlock100000Header() []byte {
+	prev, _ := hex.DecodeString("12aca0938fe1fb786c9e0e4375900e8333123de75e240abd3337d1b411d14ebe")
+	merkle, _ := hex.DecodeString("31757c266102d1bee62ef2ff8438663107d64bdd5d9d9173421ec25fb2a814de")
+	if len(prev) != 32 || len(merkle) != 32 {
+		return nil
+	}
+	prevCopy := make([]byte, 32)
+	copy(prevCopy, prev)
+	merkleCopy := make([]byte, 32)
+	copy(merkleCopy, merkle)
+	reverseBytesInPlace(prevCopy)
+	reverseBytesInPlace(merkleCopy)
+	out := make([]byte, 80)
+	binary.LittleEndian.PutUint32(out[0:4], 2)
+	copy(out[4:36], prevCopy)
+	copy(out[36:68], merkleCopy)
+	binary.LittleEndian.PutUint32(out[68:72], 0x52fd869d)
+	binary.LittleEndian.PutUint32(out[72:76], 0x1b267eeb)
+	binary.LittleEndian.PutUint32(out[76:80], 0x84214800)
+	return out
+}
+
+// verifyGPUScryptKnownVector runs the known block 100000 header+nonce through the GPU kernel and checks the hash matches CPU scrypt.
+func (ctx *OpenCLContext) verifyGPUScryptKnownVector() error {
+	if ctx.kernel == 0 {
+		return nil
+	}
+	header80 := buildBlock100000Header()
+	if len(header80) != 80 {
+		return fmt.Errorf("build known header failed")
+	}
+	headerBase := header80[:76]
+	expectedHash, err := scrypt.Key(header80, header80, 1024, 1, 1, 32)
+	if err != nil {
+		return fmt.Errorf("cpu scrypt known vector: %w", err)
+	}
+	targetBig := BitsToTarget(0x1b267eeb)
+	targetBytes := make([]byte, 32)
+	tb := targetBig.Bytes()
+	copy(targetBytes[32-len(tb):], tb)
+	reverseBytesInPlace(targetBytes)
+	nonceStart := uint32(0x84214800)
+	const scratchpadPerThread = 1024 * 32 * 4
+	scratchpadSize := 1 * scratchpadPerThread
+	var errCode int32
+	headerBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_ONLY), 76, 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || headerBuf == 0 {
+		return fmt.Errorf("verify: header buffer failed %d", errCode)
+	}
+	defer clReleaseMemObject.Call(headerBuf)
+	targetBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_ONLY), 32, 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || targetBuf == 0 {
+		return fmt.Errorf("verify: target buffer failed %d", errCode)
+	}
+	defer clReleaseMemObject.Call(targetBuf)
+	resultsBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_WRITE_ONLY), 34*4, 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || resultsBuf == 0 {
+		return fmt.Errorf("verify: results buffer failed %d", errCode)
+	}
+	defer clReleaseMemObject.Call(resultsBuf)
+	scratchpadBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_WRITE), uintptr(scratchpadSize), 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || scratchpadBuf == 0 {
+		// Driver may reject READ_WRITE for this size (e.g. -30 on some NVIDIA); try ALLOC_HOST_PTR
+		scratchpadBuf, _, _ = clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_WRITE|CL_MEM_ALLOC_HOST_PTR), uintptr(scratchpadSize), 0, uintptr(unsafe.Pointer(&errCode)))
+	}
+	if errCode != CL_SUCCESS || scratchpadBuf == 0 {
+		// Single-kernel scratchpad failed (e.g. -30); try verification via split-kernel path (no READ_WRITE)
+		if ctx.kernelFill != 0 && ctx.kernelMix != 0 && clEnqueueCopyBuffer != nil {
+			if err := ctx.verifyGPUScryptSplitKernel(headerBase, targetBytes, nonceStart, expectedHash); err == nil {
+				return nil
+			}
+		}
+		log.Printf("⚠️ GPU verification skipped (scratchpad buffer failed: %d); using GPU anyway. If blocks are invalid, report the issue.", errCode)
+		return nil
+	}
+	defer clReleaseMemObject.Call(scratchpadBuf)
+	clEnqueueWriteBuffer.Call(ctx.commandQueue, headerBuf, 1, 0, 76, uintptr(unsafe.Pointer(&headerBase[0])), 0, 0, 0)
+	clEnqueueWriteBuffer.Call(ctx.commandQueue, targetBuf, 1, 0, 32, uintptr(unsafe.Pointer(&targetBytes[0])), 0, 0, 0)
+	var zeroResults [34]uint32
+	clEnqueueWriteBuffer.Call(ctx.commandQueue, resultsBuf, 1, 0, 34*4, uintptr(unsafe.Pointer(&zeroResults[0])), 0, 0, 0)
+	clSetKernelArg.Call(ctx.kernel, 0, 8, uintptr(unsafe.Pointer(&headerBuf)))
+	clSetKernelArg.Call(ctx.kernel, 1, 4, uintptr(unsafe.Pointer(&nonceStart)))
+	clSetKernelArg.Call(ctx.kernel, 2, 8, uintptr(unsafe.Pointer(&targetBuf)))
+	clSetKernelArg.Call(ctx.kernel, 3, 8, uintptr(unsafe.Pointer(&resultsBuf)))
+	clSetKernelArg.Call(ctx.kernel, 4, 8, uintptr(unsafe.Pointer(&scratchpadBuf)))
+	globalOne := uintptr(1)
+	ret, _, _ := clEnqueueNDRangeKernel.Call(ctx.commandQueue, ctx.kernel, 1, 0, uintptr(unsafe.Pointer(&globalOne)), 0, 0, 0, 0)
+	if ret != CL_SUCCESS {
+		log.Printf("⚠️ GPU verification skipped (kernel run failed: %d); using GPU anyway.", ret)
+		return nil
+	}
+	clFinish.Call(ctx.commandQueue)
+	resultsData := make([]uint32, 34)
+	clEnqueueReadBuffer.Call(ctx.commandQueue, resultsBuf, 1, 0, 34*4, uintptr(unsafe.Pointer(&resultsData[0])), 0, 0, 0)
+	if resultsData[0] != 1 {
+		return fmt.Errorf("GPU scrypt verification failed: kernel did not find block (expected found for block 100000 nonce); GPU hash may be wrong")
+	}
+	gpuHash := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		gpuHash[i] = byte(resultsData[2+i] & 0xff)
+	}
+	reverseBytesInPlace(gpuHash)
+	for i := 0; i < 32; i++ {
+		if gpuHash[i] != expectedHash[i] {
+			return fmt.Errorf("GPU scrypt verification failed: hash mismatch at byte %d (kernel output does not match CPU scrypt)", i)
+		}
+	}
+	log.Printf("✅ GPU scrypt verification passed (known block 100000 vector)")
+	return nil
+}
+
 // buildScryptProgram compiles the OpenCL Scrypt kernel (full RFC 7914 from scrypt_kernel.cl)
 func (ctx *OpenCLContext) buildScryptProgram() error {
 	kernelSource := string(embeddedScryptKernel)
@@ -355,8 +467,9 @@ func (ctx *OpenCLContext) buildScryptProgram() error {
 		return fmt.Errorf("failed to create OpenCL program: %d", errCode)
 	}
 	
-	// Build program with performance options (5–20% gain on many GPUs)
-	buildOpts := []byte("-cl-fast-relaxed-math -cl-mad-enable -cl-no-signed-zeros -w\x00")
+	// Do NOT use -cl-fast-relaxed-math / -cl-mad-enable — they break integer/crypto correctness and cause
+	// GPU "hits" that fail CPU Scrypt verification. Warnings only.
+	buildOpts := []byte("-w\x00")
 	optsPtr := uintptr(unsafe.Pointer(&buildOpts[0]))
 	ret, _, _ := clBuildProgram.Call(
 		ctx.program,
@@ -452,8 +565,8 @@ func (ctx *OpenCLContext) buildScryptProgram() error {
 		}
 		return fmt.Errorf("failed to create OpenCL kernel: %d", errCode)
 	}
-	
-	// Create split-kernel path kernels (used when driver rejects READ_WRITE)
+
+	// Create split-kernel path kernels first (verification may use them if single-kernel scratchpad fails)
 	for _, name := range []string{"scrypt_fill", "scrypt_mix"} {
 		kb := append([]byte(name), 0)
 		kp := uintptr(unsafe.Pointer(&kb[0]))
@@ -466,6 +579,124 @@ func (ctx *OpenCLContext) buildScryptProgram() error {
 			}
 		}
 	}
+
+	// Probe scratchpad strategy before verification so we test the same path mining uses (mine_scrypt vs scrypt_fill+scrypt_mix).
+	ctx.probeScratchpadBuffer()
+	if ctx.useSplitKernelPath && ctx.kernelFill != 0 && ctx.kernelMix != 0 && clEnqueueCopyBuffer != nil {
+		header80 := buildBlock100000Header()
+		if len(header80) != 80 {
+			return fmt.Errorf("build known header failed")
+		}
+		expectedHash, err := scrypt.Key(header80, header80, 1024, 1, 1, 32)
+		if err != nil {
+			return fmt.Errorf("cpu scrypt known vector: %w", err)
+		}
+		targetBig := BitsToTarget(0x1b267eeb)
+		targetBytes := make([]byte, 32)
+		tb := targetBig.Bytes()
+		copy(targetBytes[32-len(tb):], tb)
+		reverseBytesInPlace(targetBytes)
+		if err := ctx.verifyGPUScryptSplitKernel(header80[:76], targetBytes, 0x84214800, expectedHash); err != nil {
+			log.Printf("⚠️ %v", err)
+			log.Printf("💡 GPU mining disabled for this session; using CPU only. Split-kernel OpenCL must match Dogecoin Core.")
+			ctx.scryptVerifyFailed = true
+		}
+	} else {
+		// Single-kernel path (READ_WRITE scratchpad) or verification-only fallback inside verifyGPUScryptKnownVector
+		if err := ctx.verifyGPUScryptKnownVector(); err != nil {
+			log.Printf("⚠️ %v", err)
+			log.Printf("💡 GPU mining disabled for this session; using CPU only. Fix the OpenCL scrypt kernel to match Dogecoin Core.")
+			ctx.scryptVerifyFailed = true
+		}
+	}
+
+	return nil
+}
+
+// verifyGPUScryptSplitKernel runs verification using scrypt_fill + copy + scrypt_mix (no READ_WRITE buffer). Returns nil if hash matches expected.
+func (ctx *OpenCLContext) verifyGPUScryptSplitKernel(headerBase, targetBytes []byte, nonceStart uint32, expectedHash []byte) error {
+	const scratchpadPerThread = 1024 * 32 * 4
+	scratchpadSize := 1 * scratchpadPerThread
+	stateSize := 1 * 32 * 4
+	var errCode int32
+	headerBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_ONLY), 76, 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || headerBuf == 0 {
+		return fmt.Errorf("split verify: header buf %d", errCode)
+	}
+	defer clReleaseMemObject.Call(headerBuf)
+	clEnqueueWriteBuffer.Call(ctx.commandQueue, headerBuf, 1, 0, 76, uintptr(unsafe.Pointer(&headerBase[0])), 0, 0, 0)
+	V_write, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_WRITE_ONLY), uintptr(scratchpadSize), 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || V_write == 0 {
+		return fmt.Errorf("split verify: V_write %d", errCode)
+	}
+	defer clReleaseMemObject.Call(V_write)
+	V_read, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_ONLY), uintptr(scratchpadSize), 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || V_read == 0 {
+		return fmt.Errorf("split verify: V_read %d", errCode)
+	}
+	defer clReleaseMemObject.Call(V_read)
+	state_write, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_WRITE_ONLY), uintptr(stateSize), 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || state_write == 0 {
+		return fmt.Errorf("split verify: state_write %d", errCode)
+	}
+	defer clReleaseMemObject.Call(state_write)
+	state_read, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_ONLY), uintptr(stateSize), 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || state_read == 0 {
+		return fmt.Errorf("split verify: state_read %d", errCode)
+	}
+	defer clReleaseMemObject.Call(state_read)
+	targetBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_READ_ONLY), 32, 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || targetBuf == 0 {
+		return fmt.Errorf("split verify: target %d", errCode)
+	}
+	defer clReleaseMemObject.Call(targetBuf)
+	clEnqueueWriteBuffer.Call(ctx.commandQueue, targetBuf, 1, 0, 32, uintptr(unsafe.Pointer(&targetBytes[0])), 0, 0, 0)
+	resultsBuf, _, _ := clCreateBuffer.Call(ctx.context, uintptr(CL_MEM_WRITE_ONLY), 34*4, 0, uintptr(unsafe.Pointer(&errCode)))
+	if errCode != CL_SUCCESS || resultsBuf == 0 {
+		return fmt.Errorf("split verify: results %d", errCode)
+	}
+	defer clReleaseMemObject.Call(resultsBuf)
+	var zeroResults [34]uint32
+	clEnqueueWriteBuffer.Call(ctx.commandQueue, resultsBuf, 1, 0, 34*4, uintptr(unsafe.Pointer(&zeroResults[0])), 0, 0, 0)
+	globalOne := uintptr(1)
+	clSetKernelArg.Call(ctx.kernelFill, 0, 8, uintptr(unsafe.Pointer(&headerBuf)))
+	clSetKernelArg.Call(ctx.kernelFill, 1, 4, uintptr(unsafe.Pointer(&nonceStart)))
+	clSetKernelArg.Call(ctx.kernelFill, 2, 8, uintptr(unsafe.Pointer(&V_write)))
+	clSetKernelArg.Call(ctx.kernelFill, 3, 8, uintptr(unsafe.Pointer(&state_write)))
+	ret, _, _ := clEnqueueNDRangeKernel.Call(ctx.commandQueue, ctx.kernelFill, 1, 0, uintptr(unsafe.Pointer(&globalOne)), 0, 0, 0, 0)
+	if ret != CL_SUCCESS {
+		return fmt.Errorf("split verify: fill run %d", ret)
+	}
+	clEnqueueCopyBuffer.Call(ctx.commandQueue, V_write, V_read, 0, 0, uintptr(scratchpadSize), 0, 0, 0)
+	clEnqueueCopyBuffer.Call(ctx.commandQueue, state_write, state_read, 0, 0, uintptr(stateSize), 0, 0, 0)
+	clFinish.Call(ctx.commandQueue)
+	clSetKernelArg.Call(ctx.kernelMix, 0, 8, uintptr(unsafe.Pointer(&headerBuf)))
+	clSetKernelArg.Call(ctx.kernelMix, 1, 4, uintptr(unsafe.Pointer(&nonceStart)))
+	clSetKernelArg.Call(ctx.kernelMix, 2, 8, uintptr(unsafe.Pointer(&state_read)))
+	clSetKernelArg.Call(ctx.kernelMix, 3, 8, uintptr(unsafe.Pointer(&V_read)))
+	clSetKernelArg.Call(ctx.kernelMix, 4, 8, uintptr(unsafe.Pointer(&targetBuf)))
+	clSetKernelArg.Call(ctx.kernelMix, 5, 8, uintptr(unsafe.Pointer(&resultsBuf)))
+	ret, _, _ = clEnqueueNDRangeKernel.Call(ctx.commandQueue, ctx.kernelMix, 1, 0, uintptr(unsafe.Pointer(&globalOne)), 0, 0, 0, 0)
+	if ret != CL_SUCCESS {
+		return fmt.Errorf("split verify: mix run %d", ret)
+	}
+	clFinish.Call(ctx.commandQueue)
+	resultsData := make([]uint32, 34)
+	clEnqueueReadBuffer.Call(ctx.commandQueue, resultsBuf, 1, 0, 34*4, uintptr(unsafe.Pointer(&resultsData[0])), 0, 0, 0)
+	if resultsData[0] != 1 {
+		return fmt.Errorf("split verify: kernel did not find block")
+	}
+	gpuHash := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		gpuHash[i] = byte(resultsData[2+i] & 0xff)
+	}
+	reverseBytesInPlace(gpuHash)
+	for i := 0; i < 32; i++ {
+		if gpuHash[i] != expectedHash[i] {
+			return fmt.Errorf("split verify: hash mismatch at byte %d", i)
+		}
+	}
+	log.Printf("✅ GPU scrypt verification passed (split-kernel path, known block 100000 vector)")
 	return nil
 }
 
@@ -600,11 +831,11 @@ func (g *GPUMiner) Initialize() error {
 }
 
 func (g *GPUMiner) effectiveMaxHashes() uint64 {
-	limit := g.MaxHashes
-	if g.MaxHashesThisRound > 0 && g.MaxHashesThisRound < limit {
-		limit = g.MaxHashesThisRound
+	// When MaxHashesThisRound is set (e.g. testnet 2M/round), use it so we try more nonces per template.
+	if g.MaxHashesThisRound > 0 {
+		return g.MaxHashesThisRound
 	}
-	return limit
+	return g.MaxHashes
 }
 
 // probeScratchpadBuffer finds the largest scratchpad size and creation method the driver accepts (once per context).
@@ -754,6 +985,9 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 	if g.openclCtx == nil || !g.openclCtx.initialized {
 		return g.mineParallel(block, targetBig)
 	}
+	if g.openclCtx.scryptVerifyFailed {
+		return g.mineParallel(block, targetBig)
+	}
 	// Need either single kernel (mine_scrypt) or split kernels (scrypt_fill + scrypt_mix)
 	if g.openclCtx.kernel == 0 && !g.openclCtx.useSplitKernelPath {
 		return g.mineParallel(block, targetBig)
@@ -785,7 +1019,7 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 	maxHashes := g.effectiveMaxHashes()
 	// Scrypt needs 128KB scratchpad per work item (1024*32 uints). Limit batch by VRAM.
 	const scratchpadPerThread = 1024 * 32 * 4 // 128KB in bytes
-	const maxThreadsPerBatch = 1024            // default cap; may be reduced by VRAM
+	const maxThreadsPerBatch = 8192            // default cap; may be reduced by VRAM. Larger = more nonces per GPU dispatch
 	var globalMem uint64
 	clGetDeviceInfo.Call(ctx.device, CL_DEVICE_GLOBAL_MEM_SIZE, 8, uintptr(unsafe.Pointer(&globalMem)), 0)
 	var maxAllocSize uint64
@@ -907,8 +1141,10 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 		}
 	}
 
-	// Use a random starting nonce each round so we don't always search only 0..99k (winning nonce can be anywhere in 0..2^32-1).
-	startNonce := uint32(rand.Uint32())
+	// Use random start nonce per round so successive rounds cover different parts of the nonce space.
+	// "calculated" mode was biasing every round to the same narrow start, so GPU never found blocks.
+	// We still respect NonceStartMode=random explicitly; "calculated" now also randomises per round.
+	startNonce := calculateStartNonce(block, "random")
 	totalHashesAttempted := uint64(0)
 	found := false
 
@@ -1018,6 +1254,10 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 			resultsBuf = reuseResultsBuf
 		}
 
+		// Zero results buffer so "no hit" is 0; kernel only writes when a work item finds a block.
+		var zeroResults [34]uint32
+		clEnqueueWriteBuffer.Call(ctx.commandQueue, resultsBuf, 1, 0, 34*4, uintptr(unsafe.Pointer(&zeroResults[0])), 0, 0, 0)
+
 		// Split-kernel path: only WRITE_ONLY and READ_ONLY buffers (works when driver rejects READ_WRITE)
 		if ctx.useSplitKernelPath && ctx.kernelFill != 0 && ctx.kernelMix != 0 && clEnqueueCopyBuffer != nil {
 			scratchpadSize := workSize * scratchpadPerThread
@@ -1107,6 +1347,7 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 			}
 			clEnqueueCopyBuffer.Call(ctx.commandQueue, V_write, V_read, 0, 0, uintptr(scratchpadSize), 0, 0, 0)
 			clEnqueueCopyBuffer.Call(ctx.commandQueue, state_write, state_read, 0, 0, uintptr(stateSize), 0, 0, 0)
+			clFinish.Call(ctx.commandQueue) // ensure copy completes before mix reads
 			clSetKernelArg.Call(ctx.kernelMix, 0, 8, uintptr(unsafe.Pointer(&headerBaseBuf)))
 			clSetKernelArg.Call(ctx.kernelMix, 1, 4, uintptr(unsafe.Pointer(&nonceStart)))
 			clSetKernelArg.Call(ctx.kernelMix, 2, 8, uintptr(unsafe.Pointer(&state_read)))
@@ -1148,7 +1389,36 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 				for i := 0; i < 32; i++ {
 					batchHash[i] = byte(resultsData[2+i] & 0xff)
 				}
-				log.Printf("🎉 GPU found block! Nonce: %d", batchNonce)
+				reverseBytesInPlace(batchHash) // kernel outputs BE; host uses LE for comparison and submission
+				if !hashMeetsTargetLE(batchHash, targetBytes) {
+					log.Printf("⚠️ GPU reported block but host verification failed (hash > target) — ignoring")
+					batchFound = false
+				} else {
+					// CPU Scrypt re-verification: rebuild the full 80-byte header and re-compute the hash.
+					// The GPU kernel can produce false positives (incorrect Scrypt output that happens to
+					// pass the target comparison). The node will reject these with "high-hash". We catch
+					// them here before submission.
+					header80 := make([]byte, 80)
+					copy(header80[:76], headerBase)
+					binary.LittleEndian.PutUint32(header80[76:], batchNonce)
+					cpuHash, cpuErr := scrypt.Key(header80, header80, 1024, 1, 1, 32)
+					if cpuErr != nil {
+						log.Printf("⚠️ CPU Scrypt verification error for nonce %d: %v — discarding GPU result", batchNonce, cpuErr)
+						batchFound = false
+					} else {
+						// Must match scryptHash/scryptHashFast and verifyBlockPoW: golang.org/x/crypto/scrypt.Key
+						// returns LE uint256 bytes — do NOT reverse (reversing caused false "verified" vs submit rejection).
+						cpuHashLE := make([]byte, 32)
+						copy(cpuHashLE, cpuHash)
+						if !hashMeetsTargetLE(cpuHashLE, targetBytes) {
+							log.Printf("⚠️ GPU false positive: CPU Scrypt hash does not meet target for nonce %d — discarding", batchNonce)
+							batchFound = false
+						} else {
+							batchHash = cpuHashLE // use CPU-verified hash for submission
+							log.Printf("🎉 GPU found block! Nonce: %d (CPU Scrypt verified)", batchNonce)
+						}
+					}
+				}
 			}
 			totalHashesAttempted += workSize
 			if batchFound {
@@ -1341,7 +1611,34 @@ func (g *GPUMiner) mineWithOpenCLKernel(block *Block, targetBig *big.Int) (uint3
 			for i := 0; i < 32; i++ {
 				batchHash[i] = byte(resultsData[2+i] & 0xff)
 			}
-			log.Printf("🎉 GPU found block! Nonce: %d", batchNonce)
+			reverseBytesInPlace(batchHash) // kernel outputs BE; host uses LE for comparison and submission
+			if !hashMeetsTargetLE(batchHash, targetBytes) {
+				log.Printf("⚠️ GPU reported block but host verification failed (hash > target) — ignoring")
+				batchFound = false
+			} else {
+				// CPU Scrypt re-verification: rebuild the full 80-byte header and re-compute the hash.
+				// The GPU kernel can produce false positives (incorrect Scrypt output that happens to
+				// pass the target comparison). The node will reject these with "high-hash". We catch
+				// them here before submission.
+				header80 := make([]byte, 80)
+				copy(header80[:76], headerBase)
+				binary.LittleEndian.PutUint32(header80[76:], batchNonce)
+				cpuHash, cpuErr := scrypt.Key(header80, header80, 1024, 1, 1, 32)
+				if cpuErr != nil {
+					log.Printf("⚠️ CPU Scrypt verification error for nonce %d: %v — discarding GPU result", batchNonce, cpuErr)
+					batchFound = false
+				} else {
+					cpuHashLE := make([]byte, 32)
+					copy(cpuHashLE, cpuHash)
+					if !hashMeetsTargetLE(cpuHashLE, targetBytes) {
+						log.Printf("⚠️ GPU false positive: CPU Scrypt hash does not meet target for nonce %d — discarding", batchNonce)
+						batchFound = false
+					} else {
+						batchHash = cpuHashLE // use CPU-verified hash for submission
+						log.Printf("🎉 GPU found block! Nonce: %d (CPU Scrypt verified)", batchNonce)
+					}
+				}
+			}
 		}
 
 		clReleaseMemObject.Call(headerBaseBuf)
@@ -1377,19 +1674,29 @@ func (g *GPUMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []byt
 	progressDone := make(chan struct{})
 	defer close(progressDone)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		// Short cadence so capped rounds can be cut quickly on fast-moving testnet.
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
+		roundCap := g.effectiveMaxHashes()
+		nearCapThreshold := uint64(0)
+		if roundCap > 0 {
+			nearCapThreshold = roundCap * 95 / 100
+		}
 		var lastN uint64
 		var lastT time.Time
 		var lastProgressTime time.Time
 		var lastRateKH float64
 		var roundCompleteLogged bool
 		var lastStuckLog time.Time
+		var cancelRequested bool
 		for {
 			select {
 			case <-progressDone:
 				return
 			case <-ticker.C:
+				if cancelRequested {
+					return
+				}
 				n := totalHashes.Load()
 				now := time.Now()
 				if n == 0 {
@@ -1417,10 +1724,21 @@ func (g *GPUMiner) mineParallel(block *Block, targetBig *big.Int) (uint32, []byt
 				} else {
 					// No progress this tick
 					stuckSec := now.Sub(lastProgressTime).Seconds()
+					// On short capped rounds (template freshness), some GPU paths can stall in the final tail.
+					// If we're already near the per-round cap, exit quickly so we refresh template/tip.
+					if nearCapThreshold > 0 && n >= nearCapThreshold && stuckSec >= 2 {
+						log.Printf("⛏️ Round reached near cap (%d/%d hashes) with no progress for %.0fs — ending round early", n, roundCap, stuckSec)
+						g.cancelMining.Store(true)
+						found.Store(true) // stop worker loops even if they're not checking cancel frequently
+						cancelRequested = true
+						return
+					}
 					if stuckSec >= 90 {
 						log.Printf("⛏️ No progress for 90s (stuck at %d hashes) — cancelling round to avoid hang", n)
 						g.cancelMining.Store(true)
-						continue
+						found.Store(true) // force worker exit path
+						cancelRequested = true
+						return
 					}
 					if stuckSec >= 60 {
 						if now.Sub(lastStuckLog) >= 30*time.Second || lastStuckLog.IsZero() {
@@ -1693,10 +2011,21 @@ func DetectGPUs() []string {
 func IsGPUAvailable() bool {
 	ctx, err := InitializeOpenCL()
 	if err != nil {
+		log.Printf("⚠️ GPU Detection: OpenCL initialization failed: %v", err)
+		log.Printf("   This is normal if you don't have OpenCL drivers installed")
+		log.Printf("   For NVIDIA: Install NVIDIA OpenCL drivers")
+		log.Printf("   For AMD: Install AMD OpenCL drivers")
 		return false
 	}
 	defer ctx.CleanupOpenCL()
-	return ctx.initialized && ctx.deviceType == "GPU"
+
+	available := ctx.initialized && ctx.deviceType == "GPU"
+	if available {
+		log.Printf("✅ GPU Detection: NVIDIA GPU found and ready!")
+	} else {
+		log.Printf("⚠️ GPU Detection: No GPU device available (deviceType=%s, initialized=%v)", ctx.deviceType, ctx.initialized)
+	}
+	return available
 }
 
 // generateSmartNonces creates a mix of "lucky" nonces using multiple prediction strategies

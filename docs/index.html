@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<!--
+  Doge Lucky Mining — download landing page
+  Edit owner/repo in the script at the bottom for forks.
+  Release assets = output of build.ps1 (dist/).
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download · Ðoge Lucky Mining</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        :root {
+            --bg0: #08080a;
+            --bg1: #0f0f12;
+            --surface: rgba(255, 255, 255, 0.035);
+            --surface-hover: rgba(255, 255, 255, 0.055);
+            --stroke: rgba(255, 255, 255, 0.09);
+            --stroke-strong: rgba(255, 255, 255, 0.14);
+            --text: #f4f4f5;
+            --muted: #a1a1aa;
+            --muted2: #71717a;
+            --accent: #e4c84a;
+            --accent-dim: rgba(228, 200, 74, 0.2);
+            --src: #22c55e;
+            --win: #38bdf8;
+            --mac: #a78bfa;
+            --linux: #fb923c;
+            --verify: #94a3b8;
+            --radius: 14px;
+            --radius-lg: 20px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { -webkit-font-smoothing: antialiased; }
+
+        body {
+            font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+            padding: clamp(1.25rem, 4vw, 2.5rem);
+            background:
+                radial-gradient(ellipse 120% 80% at 50% -30%, rgba(228, 200, 74, 0.12), transparent 55%),
+                radial-gradient(ellipse 80% 50% at 100% 50%, rgba(167, 139, 250, 0.06), transparent 45%),
+                radial-gradient(ellipse 60% 40% at 0% 80%, rgba(56, 189, 248, 0.05), transparent 40%),
+                linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 100%);
+        }
+
+        .wrap {
+            max-width: 760px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            margin-bottom: clamp(1.75rem, 4vw, 2.5rem);
+        }
+
+        .eyebrow {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--muted2);
+            margin-bottom: 0.65rem;
+        }
+
+        header h1 {
+            font-size: clamp(1.6rem, 4.5vw, 2.125rem);
+            font-weight: 700;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.65rem 0.85rem;
+            margin-bottom: 0.35rem;
+            line-height: 1.2;
+        }
+
+        .title-gradient {
+            font-family: "Comic Neue", cursive;
+            font-weight: 700;
+            background: linear-gradient(120deg, #d4b84a 0%, #f5e6a8 45%, #c2a633 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        header h1 .material-icons {
+            font-size: 1.2em;
+            -webkit-text-fill-color: var(--accent);
+            opacity: 0.95;
+        }
+
+        .badge {
+            font-family: Inter, sans-serif;
+            font-size: max(0.65rem, 0.55em);
+            font-weight: 600;
+            padding: 0.28rem 0.65rem;
+            border-radius: 999px;
+            color: #1a1810;
+            background: linear-gradient(135deg, #f0d875, var(--accent));
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset;
+            -webkit-text-fill-color: initial;
+            letter-spacing: 0.02em;
+        }
+
+        .tagline {
+            color: var(--muted);
+            font-size: 0.9375rem;
+            font-weight: 400;
+            max-width: 36rem;
+        }
+
+        .callout {
+            margin-top: 1.25rem;
+            padding: 0.9rem 1.1rem;
+            border-radius: var(--radius);
+            border: 1px solid var(--stroke);
+            background: var(--surface);
+            font-size: 0.8125rem;
+            color: var(--muted);
+            display: flex;
+            gap: 0.65rem;
+            align-items: flex-start;
+        }
+
+        .callout .material-icons {
+            font-size: 1.15rem;
+            color: var(--accent);
+            flex-shrink: 0;
+            margin-top: 0.1rem;
+        }
+
+        .callout code {
+            font-family: ui-monospace, "Cascadia Code", monospace;
+            font-size: 0.85em;
+            color: var(--text);
+            background: rgba(0, 0, 0, 0.35);
+            padding: 0.12em 0.35em;
+            border-radius: 4px;
+        }
+
+        .callout a {
+            color: var(--accent);
+            font-weight: 500;
+            text-decoration: none;
+        }
+
+        .callout a:hover { text-decoration: underline; }
+
+        /* Sections */
+        section {
+            margin-bottom: 1.75rem;
+        }
+
+        .panel {
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--stroke);
+            background: var(--surface);
+            padding: 1.1rem 1rem;
+            backdrop-filter: blur(12px);
+        }
+
+        @supports not (backdrop-filter: blur(12px)) {
+            .panel { background: rgba(24, 24, 28, 0.9); }
+        }
+
+        section h2 {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--muted2);
+            margin-bottom: 0.65rem;
+            padding-left: 0.15rem;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        section h2 .material-icons {
+            font-size: 1rem;
+            color: var(--muted);
+            font-weight: normal;
+            letter-spacing: 0;
+        }
+
+        .btn-grid {
+            display: grid;
+            gap: 0.55rem;
+            grid-template-columns: 1fr;
+        }
+
+        @media (min-width: 520px) {
+            .btn-grid.two { grid-template-columns: 1fr 1fr; }
+        }
+
+        a.dl-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 0.95rem 1rem;
+            border-radius: var(--radius);
+            text-decoration: none;
+            color: var(--text);
+            font-weight: 600;
+            font-size: 0.9375rem;
+            border: 1px solid var(--stroke);
+            background: rgba(0, 0, 0, 0.22);
+            transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+        }
+
+        a.dl-btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--stroke-strong);
+            transform: translateY(-1px);
+        }
+
+        a.dl-btn:active { transform: translateY(0); }
+
+        .dl-icon {
+            width: 2.65rem;
+            height: 2.65rem;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .dl-icon .material-icons {
+            font-size: 1.4rem;
+        }
+
+        a.dl-btn .dl-text {
+            display: flex;
+            flex-direction: column;
+            gap: 0.1rem;
+            align-items: flex-start;
+            min-width: 0;
+        }
+
+        a.dl-btn .dl-text small {
+            font-weight: 400;
+            font-size: 0.75rem;
+            color: var(--muted);
+            line-height: 1.35;
+        }
+
+        a.dl-btn.src .dl-icon { background: rgba(34, 197, 94, 0.18); color: var(--src); }
+
+        a.dl-btn.win .dl-icon { background: rgba(56, 189, 248, 0.15); color: var(--win); }
+        a.dl-btn.mac .dl-icon { background: rgba(167, 139, 250, 0.15); color: var(--mac); }
+        a.dl-btn.linux .dl-icon { background: rgba(251, 146, 60, 0.15); color: var(--linux); }
+        a.dl-btn.verify .dl-icon { background: rgba(148, 163, 184, 0.12); color: var(--verify); }
+
+        a.dl-btn.github .dl-icon {
+            background: rgba(255, 255, 255, 0.08);
+            color: #e6edf3;
+        }
+
+        a.dl-btn {
+            border-left: 3px solid transparent;
+        }
+
+        a.dl-btn.src:first-of-type { border-left-color: rgba(34, 197, 94, 0.55); }
+        a.dl-btn.github { border-left-color: rgba(230, 237, 243, 0.35); }
+        a.dl-btn.win { border-left-color: rgba(56, 189, 248, 0.55); }
+        a.dl-btn.mac { border-left-color: rgba(167, 139, 250, 0.55); }
+        a.dl-btn.linux { border-left-color: rgba(251, 146, 60, 0.55); }
+        a.dl-btn.verify { border-left-color: rgba(148, 163, 184, 0.45); }
+
+        a.dl-btn.verify { font-size: 0.875rem; }
+
+        .hint {
+            margin-top: 1.5rem;
+            padding: 0.85rem 1rem;
+            border-radius: var(--radius);
+            border: 1px solid var(--stroke);
+            font-size: 0.8125rem;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        footer {
+            margin-top: 1.75rem;
+            text-align: center;
+            font-size: 0.8125rem;
+            color: var(--muted2);
+        }
+
+        footer a {
+            color: var(--muted);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        footer a:hover { color: var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <header>
+            <p class="eyebrow">Downloads</p>
+            <h1>
+                <span class="title-gradient">
+                    <span class="material-icons" aria-hidden="true">pets</span>
+                    Ðoge Lucky Mining
+                </span>
+                <span class="badge">Beta v420.69</span>
+            </h1>
+            <p class="tagline">Pre-built binaries from GitHub Release <a href="https://github.com/qlpqlp/DogeLuckyMining/releases/tag/v0.1" style="color:var(--accent);font-weight:600;text-decoration:none">v0.1</a>, plus source.</p>
+            <div class="callout">
+                <span class="material-icons" aria-hidden="true">info</span>
+                <div>
+                    Platform downloads and <code>SHA256SUMS.txt</code> below point at
+                    <a href="#" id="linkReleaseV01">release v0.1</a> assets. The repository ZIP is still the current <code>main</code> branch snapshot from GitHub.
+                </div>
+            </div>
+        </header>
+
+        <section aria-labelledby="src-heading">
+            <h2 id="src-heading"><span class="material-icons">code</span> Source</h2>
+            <div class="panel">
+                <div class="btn-grid">
+                    <a class="dl-btn src" id="dlZip" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">folder_zip</span></span>
+                        <span class="dl-text">
+                            Repository (ZIP)
+                            <small>main branch · GitHub archive</small>
+                        </span>
+                    </a>
+                    <a class="dl-btn src github" id="dlGithub" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">hub</span></span>
+                        <span class="dl-text">
+                            View on GitHub
+                            <small>Repository home</small>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <section aria-labelledby="win-heading">
+            <h2 id="win-heading"><span class="material-icons">laptop_windows</span> Windows</h2>
+            <div class="panel">
+                <div class="btn-grid two">
+                    <a class="dl-btn win" data-asset="dogelucky-windows-amd64.exe" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">download</span></span>
+                        <span class="dl-text">
+                            64-bit
+                            <small>dogelucky-windows-amd64.exe</small>
+                        </span>
+                    </a>
+                    <a class="dl-btn win" data-asset="dogelucky-windows-386.exe" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">download</span></span>
+                        <span class="dl-text">
+                            32-bit
+                            <small>dogelucky-windows-386.exe</small>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <section aria-labelledby="mac-heading">
+            <h2 id="mac-heading"><span class="material-icons">laptop_mac</span> macOS</h2>
+            <div class="panel">
+                <div class="btn-grid two">
+                    <a class="dl-btn mac" data-asset="dogelucky-darwin-amd64" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">download</span></span>
+                        <span class="dl-text">
+                            Intel (amd64)
+                            <small>dogelucky-darwin-amd64</small>
+                        </span>
+                    </a>
+                    <a class="dl-btn mac" data-asset="dogelucky-darwin-arm64" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">download</span></span>
+                        <span class="dl-text">
+                            Apple Silicon (arm64)
+                            <small>dogelucky-darwin-arm64</small>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <section aria-labelledby="linux-heading">
+            <h2 id="linux-heading"><span class="material-icons">terminal</span> Linux</h2>
+            <div class="panel">
+                <div class="btn-grid two">
+                    <a class="dl-btn linux" data-asset="dogelucky-linux-amd64" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">download</span></span>
+                        <span class="dl-text">
+                            amd64
+                            <small>dogelucky-linux-amd64</small>
+                        </span>
+                    </a>
+                    <a class="dl-btn linux" data-asset="dogelucky-linux-arm64" href="#" rel="noopener noreferrer">
+                        <span class="dl-icon"><span class="material-icons" aria-hidden="true">download</span></span>
+                        <span class="dl-text">
+                            arm64
+                            <small>dogelucky-linux-arm64</small>
+                        </span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <section aria-labelledby="verify-heading">
+            <h2 id="verify-heading"><span class="material-icons">verified_user</span> Checksums</h2>
+            <div class="panel">
+                <a class="dl-btn verify" data-asset="SHA256SUMS.txt" href="#" rel="noopener noreferrer">
+                    <span class="dl-icon"><span class="material-icons" aria-hidden="true">fingerprint</span></span>
+                    <span class="dl-text">
+                        SHA256SUMS.txt
+                        <small>Verify binaries with <code style="background:transparent;padding:0;color:inherit">sha256sum</code> / PowerShell <code style="background:transparent;padding:0;color:inherit">Get-FileHash</code></small>
+                    </span>
+                </a>
+            </div>
+        </section>
+
+        <p class="hint">Run the binary, open the web UI, set a payout address, then start mining.</p>
+
+        <footer>
+            <p><a id="linkRepoFooter" href="#">Repository</a> · <a id="linkReleasesFooter" href="#">Releases</a></p>
+        </footer>
+    </div>
+
+    <script>
+        (function () {
+            var owner = "qlpqlp";
+            var repo = "DogeLuckyMining";
+            var base = "https://github.com/" + owner + "/" + repo;
+            var releaseTag = "v420.69";
+            var releaseDownload = base + "/releases/download/" + releaseTag + "/";
+
+            document.getElementById("dlZip").href = base + "/archive/refs/heads/main.zip";
+            document.getElementById("dlGithub").href = base;
+            var tagUrl = base + "/releases/tag/" + releaseTag;
+            document.getElementById("linkReleaseV01").href = tagUrl;
+            document.getElementById("linkRepoFooter").href = base;
+            document.getElementById("linkReleasesFooter").href = base + "/releases";
+
+            document.querySelectorAll("a.dl-btn[data-asset]").forEach(function (a) {
+                var name = a.getAttribute("data-asset");
+                if (name) a.href = releaseDownload + encodeURIComponent(name);
+            });
+        })();
+    </script>
+</body>
+</html>

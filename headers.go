@@ -285,3 +285,15 @@ func (hf *HeaderFetcher) GetHeadersCount() int {
 	defer hf.headersMutex.RUnlock()
 	return len(hf.headers)
 }
+
+// Serialize returns the 80-byte binary serialization of the block header
+func (bh *BlockHeader) Serialize() []byte {
+	var buf [80]byte
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(bh.Version))
+	copy(buf[4:36], bh.PrevBlock[:])
+	copy(buf[36:68], bh.MerkleRoot[:])
+	binary.LittleEndian.PutUint32(buf[68:72], bh.Timestamp)
+	binary.LittleEndian.PutUint32(buf[72:76], bh.Bits)
+	binary.LittleEndian.PutUint32(buf[76:80], bh.Nonce)
+	return buf[:]
+}
